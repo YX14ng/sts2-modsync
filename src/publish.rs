@@ -157,16 +157,28 @@ pub fn write_out(prep: &Prepared, out_dir: &Path) -> Result<PathBuf> {
     }
     let manifest_path = out_dir.join("set-manifest.json");
     let json = serde_json::to_string_pretty(&prep.manifest)?;
-    std::fs::write(&manifest_path, json)
+    std::fs::write(&manifest_path, &json)
         .with_context(|| format!("escribiendo {}", manifest_path.display()))?;
+    // Firmar si el modder tiene clave secreta (`keygen`). Sin clave => sin firma (modo dev).
+    if let Some(sk) = crate::signing::load_secret_key() {
+        let sig = crate::signing::sign(&sk, json.as_bytes())?;
+        let sig_path = out_dir.join("set-manifest.json.minisig");
+        std::fs::write(&sig_path, sig)
+            .with_context(|| format!("escribiendo {}", sig_path.display()))?;
+    }
     Ok(manifest_path)
 }
 
 /// Comando sugerido para subir todo a un GitHub Release con el `gh` CLI (el tag = set_version,
-/// que debe coincidir con el `<tag>` del `base_url`).
+/// que debe coincidir con el `<tag>` del `base_url`). Incluye el `.minisig` si se firmo.
 pub fn gh_hint(set_version: &str, out_dir: &Path) -> String {
+    let sig = if out_dir.join("set-manifest.json.minisig").exists() {
+        " set-manifest.json.minisig"
+    } else {
+        ""
+    };
     format!(
-        "cd \"{}\" && gh release create {set_version} set-manifest.json assets/*",
+        "cd \"{}\" && gh release create {set_version} set-manifest.json{sig} assets/*",
         out_dir.display()
     )
 }

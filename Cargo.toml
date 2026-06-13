@@ -10,7 +10,7 @@ anyhow = "1.0.102"
 blake3 = { version = "1.8.5", features = ["rayon", "mmap"] }
 directories = "6.0.0"
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts"], optional = true }
-minisign-verify = "0.2.5"
+minisign = "0.9.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rfd = "0.17.2"
 self-replace = "1.5.0"

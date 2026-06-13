@@ -25,10 +25,13 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
   transporte baja por `base_url + blake3`, NO por `entry.path` (que queda solo para instalar local).
   **FASE 3:** delta intra-`.pck` (bita), auto-update, HTTP Range/resume. Detalle en HANDOFF.md.
 
-`signing::PUBLISHER_PUBKEY` vacia = **modo dev** (firma NO verificada — setear la clave real antes
-de un release publico). `eframe` es dep **opcional** (feature `gui`); el resto del core (incl.
-`reqwest`/`zip`/`trash`) es dep normal. La descarga corre en el worker thread del GUI (por eso
-blocking, no async).
+**Firma minisign (real, crate `minisign`):** `keygen` genera el par (secreto en
+`%APPDATA%/.../minisign.key`, fuera del repo); `publish` firma el set-manifest si hay clave secreta
+(escribe `set-manifest.json.minisig`); el cliente baja el `.minisig` (junto al manifest, sufijo
+`.minisig`) y `signing::verify_with_embedded` lo valida con la pub empotrada. `PUBLISHER_PUBKEY`
+vacia = **modo dev** (firma NO verificada — pegar la pub de `keygen` para activarla en release).
+`eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
+`self-replace`) es dep normal.
 
 ## Arquitectura (modulos en `src/`)
 
@@ -51,7 +54,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 - GUI (mod manager): `cargo run --features gui --bin sts2-modsync-gui` (pestañas Mods/Sync/Perfiles/Publicar).
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json>` (dry-run)
   · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>]` (modder)
-  · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`).
+  · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
+  · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.
 - Un solo test: `cargo test <nombre>` (o por modulo `cargo test modlist::tests::`); `-- --nocapture`
   para ver prints. Tests inline en `manifest`/`modlist`/`profile`/`sync`/`publish` (varios crean

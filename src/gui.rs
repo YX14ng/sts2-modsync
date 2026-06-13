@@ -23,6 +23,9 @@ const OK: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
 const BAD: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x57, 0x57);
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x7C, 0x9C, 0xFF);
 
+/// Resultado del worker que baja el set-manifest + su `.minisig` opcional.
+type FetchResult = std::result::Result<(String, Option<String>), String>;
+
 /// Tema moderno: oscuro/claro con acento, espaciado generoso y tipografia mas grande.
 /// El default de egui se ve "CMD"; esto le da jerarquia visual.
 fn apply_theme(ctx: &egui::Context, dark: bool) {
@@ -414,8 +417,8 @@ struct SyncState {
     plan: Option<sync::Plan>,
     plan_job: Option<Receiver<Result<sync::Plan, String>>>,
     consent: bool,
-    /// Descarga del set-manifest por URL (worker).
-    fetch_job: Option<Receiver<Result<String, String>>>,
+    /// Descarga del set-manifest (+ su `.minisig` opcional) por URL (worker).
+    fetch_job: Option<Receiver<FetchResult>>,
     apply_job: Option<Receiver<SyncProgress>>,
     prog: ProgressState,
 }
@@ -1259,7 +1262,11 @@ impl App {
             return;
         };
         match std::fs::read_to_string(&path) {
-            Ok(text) => self.load_from_text(&text, path.display().to_string(), ctx),
+            Ok(text) => {
+                // Firma opcional: un `<archivo>.minisig` al lado.
+                let sig = std::fs::read_to_string(format!("{}.minisig", path.display())).ok();
+                self.load_from_text(&text, path.display().to_string(), sig, ctx);
+            }
             Err(e) => self.sync.load_err = Some(format!("no se pudo leer: {e}")),
         }
     }
@@ -1275,7 +1282,13 @@ impl App {
         self.sync.fetch_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let res = transport::get_text(&url).map_err(|e| format!("{e:#}"));
+            let res = transport::get_text(&url)
+                .map(|manifest| {
+                    // La firma es opcional (modo dev no la trae): best-effort.
+                    let sig = transport::get_text(&format!("{url}.minisig")).ok();
+                    (manifest, sig)
+                })
+                .map_err(|e| format!("{e:#}"));
             let _ = tx.send(res);
             ctx.request_repaint();
         });
@@ -1298,9 +1311,9 @@ impl App {
         };
         self.sync.fetch_job = None;
         match res {
-            Ok(text) => {
+            Ok((text, sig)) => {
                 let url = self.sync.url.trim().to_string();
-                self.load_from_text(&text, url.clone(), ctx);
+                self.load_from_text(&text, url.clone(), sig, ctx);
                 // Guardar la suscripcion si cargo bien (1 clic para re-sincronizar despues).
                 if self.sync.load_err.is_none()
                     && !url.is_empty()
@@ -1314,15 +1327,23 @@ impl App {
         }
     }
 
-    /// Verifica firma (modo dev) + parsea el manifest + arranca el plan. `source` = etiqueta.
-    fn load_from_text(&mut self, text: &str, source: String, ctx: &egui::Context) {
+    /// Verifica firma + parsea el manifest + arranca el plan. `source` = etiqueta;
+    /// `signature` = contenido del `.minisig` (None si el set no esta firmado / modo dev).
+    fn load_from_text(
+        &mut self,
+        text: &str,
+        source: String,
+        signature: Option<String>,
+        ctx: &egui::Context,
+    ) {
         self.sync.load_err = None;
         self.sync.plan = None;
         self.sync.plan_job = None;
         self.sync.consent = false;
         self.sync.manifest = None;
         self.sync.source = source;
-        if let Err(e) = crate::signing::verify_with_embedded(text.as_bytes(), None) {
+        if let Err(e) = crate::signing::verify_with_embedded(text.as_bytes(), signature.as_deref())
+        {
             self.sync.load_err = Some(format!("firma invalida: {e:#}"));
             return;
         }

@@ -13,8 +13,8 @@ use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 use sts2_modsync::{
-    config, detect, launch, manager, manifest::SetManifest, modlist, profile, publish, sync,
-    transport, update,
+    config, detect, launch, manager, manifest::SetManifest, modlist, profile, publish, signing,
+    sync, transport, update,
 };
 
 fn main() -> Result<()> {
@@ -27,6 +27,9 @@ fn main() -> Result<()> {
     }
     if cmd == "update" {
         return cmd_update();
+    }
+    if cmd == "keygen" {
+        return cmd_keygen();
     }
 
     let cfg = config::load();
@@ -133,13 +136,41 @@ fn cmd_list(install: &detect::Install) -> Result<()> {
     Ok(())
 }
 
+/// `keygen`: genera el par minisign del modder, guarda la secreta fuera del repo e imprime
+/// la clave publica para pegar en `signing::PUBLISHER_PUBKEY`.
+fn cmd_keygen() -> Result<()> {
+    let path = signing::secret_key_path().context("no se pudo resolver el path de la clave")?;
+    if path.exists() {
+        bail!(
+            "ya existe una clave en {} (borrala si querés regenerar)",
+            path.display()
+        );
+    }
+    let (sk, pk) = signing::generate_keypair()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &sk).with_context(|| format!("escribiendo {}", path.display()))?;
+    println!("Clave SECRETA guardada en: {}", path.display());
+    println!("(NO la compartas ni la subas al repo — con ella `publish` firma tus sets.)\n");
+    println!("Pega esta clave PUBLICA en src/signing.rs (PUBLISHER_PUBKEY) y recompila:\n");
+    println!("  {pk}\n");
+    Ok(())
+}
+
 fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
     print_install(install);
-    let manifest = if src.starts_with("http") {
-        SetManifest::from_json_str(&transport::get_text(src)?)?
+    let (text, sig) = if src.starts_with("http") {
+        let t = transport::get_text(src)?;
+        let s = transport::get_text(&format!("{src}.minisig")).ok(); // firma opcional
+        (t, s)
     } else {
-        SetManifest::from_json_file(Path::new(src))?
+        let t = std::fs::read_to_string(src)?;
+        let s = std::fs::read_to_string(format!("{src}.minisig")).ok();
+        (t, s)
     };
+    signing::verify_with_embedded(text.as_bytes(), sig.as_deref())?;
+    let manifest = SetManifest::from_json_str(&text)?;
     println!(
         "\nSet: {} v{}  ({} mods)",
         manifest.set_name,
@@ -315,5 +346,6 @@ fn print_help() {
     println!("  publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>]");
     println!("                        genera un set-manifest + assets desde tus mods (modder)");
     println!("  update                chequea GitHub y actualiza la app si hay version nueva");
+    println!("  keygen                genera el par de claves minisign del modder (firma sets)");
     println!("\nGUI (mod manager con pestañas): cargo run --features gui --bin sts2-modsync-gui");
 }
