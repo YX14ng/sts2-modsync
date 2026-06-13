@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "set_name": "FGO de Chaldea",
+  "set_version": "2026.06.13",
+  "published_at": "2026-06-13T18:00:00Z",
+  "signing_key_id": "chaldea-1",
+  "base_url": "https://github.com/<usuario>/<repo>/releases/download/2026.06.13/",
+  "baselib_version": "3.2.1",
+  "mods": [
+    {
+      "id": "BaseLib",
+      "version": "3.2.1",
+      "dependencies": [],
+      "files": [
+        { "path": "BaseLib/BaseLib.json", "size": 412, "blake3": "0000000000000000000000000000000000000000000000000000000000000000" },
+        { "path": "BaseLib/BaseLib.dll", "size": 1048576, "blake3": "1111111111111111111111111111111111111111111111111111111111111111" }
+      ]
+    },
+    {
+      "id": "FGOCore",
+      "version": "0.4.0",
+      "dependencies": ["BaseLib"],
+      "files": [
+        { "path": "FGOCore/FGOCore.json", "size": 380, "blake3": "2222222222222222222222222222222222222222222222222222222222222222" },
+        { "path": "FGOCore/FGOCore.dll", "size": 262144, "blake3": "3333333333333333333333333333333333333333333333333333333333333333" }
+      ]
+    },
+    {
+      "id": "MashShielder",
+      "version": "1.0.0",
+      "dependencies": ["BaseLib", "FGOCore"],
+      "files": [
+        { "path": "MashShielder/MashShielder.json", "size": 520, "blake3": "4444444444444444444444444444444444444444444444444444444444444444" },
+        { "path": "MashShielder/MashShielder.dll", "size": 196608, "blake3": "5555555555555555555555555555555555555555555555555555555555555555" },
+        { "path": "MashShielder/MashShielder.pck", "size": 141557760, "blake3": "6666666666666666666666666666666666666666666666666666666666666666" }
+      ]
+    }
+  ]
+}

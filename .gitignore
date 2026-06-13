@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Artefactos de build / empaquetado
+/dist
+*.pdb
+
+# Config local del usuario (rutas de su maquina, credenciales)
+config.local.toml
+*.local.toml
+
+# Sets de mods de prueba / payloads grandes (no versionar binarios pesados)
+/test-mods
+*.pck
+*.dll
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

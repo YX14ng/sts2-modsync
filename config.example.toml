@@ -1,0 +1,12 @@
+# Plantilla de config (la real vive en %APPDATA%/sts2-modsync/config.toml y esta
+# gitignorada). NO pongas secretos aca: la clave PUBLICA de firma va empotrada en
+# el binario y la PRIVADA jamas toca al cliente.
+
+# Ruta del install de StS2 (la app la cachea tras detectarla; podes fijarla a mano
+# para copias pirata en rutas raras).
+# install_root = "D:\\Games\\Slay the Spire 2"
+
+# URLs de manifiestos de set a los que estas suscripto.
+subscribed_sets = [
+  # "https://github.com/<usuario>/<repo>/releases/latest/download/set-manifest.json",
+]
