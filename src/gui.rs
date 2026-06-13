@@ -19,8 +19,68 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 const WARN: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x00);
-const OK: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x8B, 0x57);
-const BAD: egui::Color32 = egui::Color32::from_rgb(0xC0, 0x40, 0x40);
+const OK: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
+const BAD: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x57, 0x57);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x7C, 0x9C, 0xFF);
+
+/// Tema moderno: oscuro/claro con acento, espaciado generoso y tipografia mas grande.
+/// El default de egui se ve "CMD"; esto le da jerarquia visual.
+fn apply_theme(ctx: &egui::Context, dark: bool) {
+    let mut style = (*ctx.global_style()).clone();
+    let mut v = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    v.selection.bg_fill = ACCENT.linear_multiply(0.45);
+    v.hyperlink_color = ACCENT;
+    if dark {
+        v.panel_fill = egui::Color32::from_rgb(0x17, 0x19, 0x21);
+        v.window_fill = egui::Color32::from_rgb(0x1D, 0x20, 0x2A);
+        v.extreme_bg_color = egui::Color32::from_rgb(0x10, 0x12, 0x18);
+        v.faint_bg_color = egui::Color32::from_rgb(0x23, 0x26, 0x32);
+        v.override_text_color = Some(egui::Color32::from_rgb(0xDA, 0xDE, 0xE8));
+    }
+    style.visuals = v;
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.interact_size.y = 28.0;
+    style.spacing.window_margin = egui::Margin::same(10);
+    use egui::{FontId, TextStyle};
+    style.text_styles = [
+        (TextStyle::Heading, FontId::proportional(22.0)),
+        (TextStyle::Body, FontId::proportional(15.0)),
+        (TextStyle::Button, FontId::proportional(15.0)),
+        (TextStyle::Monospace, FontId::monospace(13.0)),
+        (TextStyle::Small, FontId::proportional(12.0)),
+    ]
+    .into();
+    ctx.set_global_style(style);
+}
+
+/// Seccion enmarcada ("card") reusable para darle jerarquia al contenido.
+fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::default()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            if !title.is_empty() {
+                ui.label(egui::RichText::new(title).strong().color(ACCENT));
+                ui.add_space(6.0);
+            }
+            add(ui)
+        })
+        .inner
+}
+
+/// Item de navegacion full-width del sidebar.
+fn nav_item(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
+    let w = ui.available_width();
+    ui.add_sized([w, 32.0], egui::Button::selectable(selected, label))
+        .clicked()
+}
 
 pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -36,6 +96,7 @@ pub fn run() -> eframe::Result {
         options,
         Box::new(|cc| {
             install_cjk_font(&cc.egui_ctx);
+            apply_theme(&cc.egui_ctx, true);
             Ok(Box::new(App::new()))
         }),
     )
@@ -119,6 +180,8 @@ struct App {
     update_checked: bool,
     update_check_job: Option<Receiver<Option<update::Release>>>,
     update_avail: Option<update::Release>,
+
+    dark_mode: bool,
 }
 
 impl App {
@@ -150,6 +213,7 @@ impl App {
             update_checked: false,
             update_check_job: None,
             update_avail: None,
+            dark_mode: true,
         };
         app.try_detect();
         app
@@ -343,12 +407,15 @@ struct ProgressState {
 #[derive(Default)]
 struct SyncState {
     screen: SyncScreen,
-    manifest_path: Option<PathBuf>,
+    url: String,    // input de URL del set
+    source: String, // etiqueta del set cargado (archivo o URL), vacia = nada cargado
     manifest: Option<SetManifest>,
     load_err: Option<String>,
     plan: Option<sync::Plan>,
     plan_job: Option<Receiver<Result<sync::Plan, String>>>,
     consent: bool,
+    /// Descarga del set-manifest por URL (worker).
+    fetch_job: Option<Receiver<Result<String, String>>>,
     apply_job: Option<Receiver<SyncProgress>>,
     prog: ProgressState,
 }
@@ -360,6 +427,7 @@ impl eframe::App for App {
         self.poll_action(&ctx);
         self.poll_plan_job(&ctx);
         self.poll_apply_job(&ctx);
+        self.poll_fetch_job(&ctx);
         if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
             self.kick_scan(&ctx);
         }
@@ -369,15 +437,87 @@ impl eframe::App for App {
         }
         self.poll_update_check();
 
-        self.ui_header(ui);
-        ui.separator();
+        egui::Panel::top("topbar")
+            .frame(
+                egui::Frame::default()
+                    .fill(ctx.global_style().visuals.window_fill)
+                    .inner_margin(egui::Margin::symmetric(14, 10)),
+            )
+            .show_inside(ui, |ui| self.ui_topbar(ui));
 
-        // Banner de auto-update (si hay una version nueva en GitHub).
+        egui::Panel::left("nav")
+            .resizable(false)
+            .exact_size(176.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(ctx.global_style().visuals.panel_fill)
+                    .inner_margin(egui::Margin::same(10)),
+            )
+            .show_inside(ui, |ui| self.ui_nav(ui, &ctx));
+
+        egui::Frame::default()
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, |ui| match self.tab {
+                Tab::Mods => self.ui_mods(ui, &ctx),
+                Tab::Sync => self.ui_sync(ui, &ctx),
+                Tab::Profiles => self.ui_profiles(ui, &ctx),
+                Tab::Publish => self.ui_publish(ui, &ctx),
+            });
+    }
+}
+
+impl App {
+    fn ui_topbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("sts2-modsync").heading().color(ACCENT));
+            ui.add_space(10.0);
+            match &self.install {
+                Some(i) => {
+                    ui.colored_label(OK, "●");
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "StS2 {}",
+                            i.version.as_deref().unwrap_or("?")
+                        ))
+                        .weak(),
+                    );
+                }
+                None => {
+                    ui.colored_label(WARN, "● juego no detectado");
+                }
+            }
+            if self.game_running {
+                ui.colored_label(WARN, "· ABIERTO");
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let has = self.install.is_some();
+                if ui.add_enabled(has, egui::Button::new("▶ Jugar")).clicked() {
+                    let r = self.install.as_ref().map(launch::launch);
+                    if let Some(r) = r {
+                        self.toast = Some(match r {
+                            Ok(()) => ("lanzando el juego...".into(), false),
+                            Err(e) => (format!("{e:#}"), true),
+                        });
+                    }
+                }
+                if ui.button("Elegir carpeta").clicked() {
+                    match detect::pick_folder_dialog() {
+                        Some(i) => self.accept_install(i),
+                        None => self.install_note = "Carpeta invalida.".into(),
+                    }
+                }
+                if ui.button("Re-detectar").clicked() {
+                    self.try_detect();
+                }
+            });
+        });
+
+        // Banner de auto-update.
         if let Some(rel) = self.update_avail.clone() {
             let can = self.busy.is_empty() && self.action_job.is_none();
             let mut do_update = false;
             ui.horizontal(|ui| {
-                ui.colored_label(OK, format!("● Version nueva {} disponible", rel.tag));
+                ui.colored_label(ACCENT, format!("● Version nueva {} disponible", rel.tag));
                 if ui
                     .add_enabled(can, egui::Button::new("Actualizar ahora"))
                     .clicked()
@@ -386,73 +526,35 @@ impl eframe::App for App {
                 }
             });
             if do_update {
+                let ctx = ui.ctx().clone();
                 self.start_update(&ctx, rel);
             }
-            ui.separator();
-        }
-
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.tab, Tab::Mods, "Mods");
-            ui.selectable_value(&mut self.tab, Tab::Sync, "Sync");
-            ui.selectable_value(&mut self.tab, Tab::Profiles, "Perfiles");
-            ui.selectable_value(&mut self.tab, Tab::Publish, "Publicar");
-        });
-        ui.separator();
-
-        match self.tab {
-            Tab::Mods => self.ui_mods(ui, &ctx),
-            Tab::Sync => self.ui_sync(ui, &ctx),
-            Tab::Profiles => self.ui_profiles(ui, &ctx),
-            Tab::Publish => self.ui_publish(ui, &ctx),
         }
     }
-}
 
-impl App {
-    fn ui_header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| match &self.install {
-            Some(i) => {
-                ui.label(egui::RichText::new("StS2:").strong());
-                ui.label(i.root.display().to_string());
-                ui.label(format!("· {}", i.version.as_deref().unwrap_or("?")));
-            }
-            None => {
-                let note = if self.install_note.is_empty() {
-                    "Buscando el juego..."
-                } else {
-                    self.install_note.as_str()
-                };
-                ui.colored_label(WARN, note);
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Re-detectar").clicked() {
-                self.try_detect();
-            }
-            if ui.button("Elegir carpeta...").clicked() {
-                match detect::pick_folder_dialog() {
-                    Some(i) => self.accept_install(i),
-                    None => {
-                        self.install_note = "Esa carpeta no es un install valido de StS2.".into()
-                    }
-                }
-            }
-            let has = self.install.is_some();
-            if ui
-                .add_enabled(has, egui::Button::new("▶ Lanzar juego"))
-                .clicked()
-            {
-                // launch::launch toma &Install; soltamos el prestamo antes de tocar toast.
-                let r = self.install.as_ref().map(launch::launch);
-                if let Some(r) = r {
-                    self.toast = Some(match r {
-                        Ok(()) => ("lanzando el juego...".into(), false),
-                        Err(e) => (format!("{e:#}"), true),
-                    });
-                }
-            }
-            if self.game_running {
-                ui.colored_label(WARN, "● juego ABIERTO (cerralo para tocar mods)");
+    fn ui_nav(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(4.0);
+        if nav_item(ui, self.tab == Tab::Mods, "Mods") {
+            self.tab = Tab::Mods;
+        }
+        if nav_item(ui, self.tab == Tab::Sync, "Sync") {
+            self.tab = Tab::Sync;
+        }
+        if nav_item(ui, self.tab == Tab::Profiles, "Perfiles") {
+            self.tab = Tab::Profiles;
+        }
+        if nav_item(ui, self.tab == Tab::Publish, "Publicar") {
+            self.tab = Tab::Publish;
+        }
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            let txt = if self.dark_mode {
+                "Tema claro"
+            } else {
+                "Tema oscuro"
+            };
+            if ui.button(txt).clicked() {
+                self.dark_mode = !self.dark_mode;
+                apply_theme(ctx, self.dark_mode);
             }
         });
     }
@@ -545,46 +647,46 @@ impl App {
         let mut toggle: Option<String> = None;
         let mut select: Option<String> = None;
 
-        egui::ScrollArea::vertical()
-            .max_height(280.0)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Habilitados ({n_on})  ·  Deshabilitados ({n_off})"
-                    ))
-                    .weak(),
-                );
-                for i in 0..self.mods.len() {
-                    let m = &self.mods[i];
-                    if !filter.is_empty() && !mod_matches(m, &filter) {
-                        continue;
-                    }
-                    let id = m.id().to_string();
-                    let mut on = m.enabled;
-                    let gameplay = m.manifest.affects_gameplay;
-                    let name = m.manifest.display_name().to_string();
-                    let ver = m.manifest.version.clone().unwrap_or_else(|| "?".into());
-                    let size = human_size(m.size_bytes);
-                    let is_sel = self.selected.as_deref() == Some(id.as_str());
+        card(
+            ui,
+            &format!("Mods  ·  {n_on} habilitados  ·  {n_off} deshabilitados"),
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for i in 0..self.mods.len() {
+                            let m = &self.mods[i];
+                            if !filter.is_empty() && !mod_matches(m, &filter) {
+                                continue;
+                            }
+                            let id = m.id().to_string();
+                            let mut on = m.enabled;
+                            let gameplay = m.manifest.affects_gameplay;
+                            let name = m.manifest.display_name().to_string();
+                            let ver = m.manifest.version.clone().unwrap_or_else(|| "?".into());
+                            let size = human_size(m.size_bytes);
+                            let is_sel = self.selected.as_deref() == Some(id.as_str());
 
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(can_act, egui::Checkbox::new(&mut on, ""))
-                            .changed()
-                        {
-                            toggle = Some(id.clone());
-                        }
-                        let label = format!("{name}  ·  {ver}  ·  {size}");
-                        if ui.selectable_label(is_sel, label).clicked() {
-                            select = Some(id.clone());
-                        }
-                        if gameplay {
-                            ui.colored_label(WARN, "gameplay");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(can_act, egui::Checkbox::new(&mut on, ""))
+                                    .changed()
+                                {
+                                    toggle = Some(id.clone());
+                                }
+                                let label = format!("{name}  ·  {ver}  ·  {size}");
+                                if ui.selectable_label(is_sel, label).clicked() {
+                                    select = Some(id.clone());
+                                }
+                                if gameplay {
+                                    ui.colored_label(WARN, "gameplay");
+                                }
+                            });
                         }
                     });
-                }
-            });
+            },
+        );
 
         if let Some(id) = select {
             self.selected = Some(id);
@@ -995,19 +1097,79 @@ impl App {
     }
 
     fn ui_sync_review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.horizontal(|ui| {
-            if ui.button("Abrir set-manifest...").clicked() {
-                self.open_manifest(ctx);
+        let mut do_load_url = false;
+        let mut do_open_file = false;
+        let mut load_saved: Option<String> = None;
+        let mut del_saved: Option<String> = None;
+
+        card(ui, "Cargar un set", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("URL:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sync.url)
+                        .hint_text("https://.../set-manifest.json")
+                        .desired_width(360.0),
+                );
+                let can = self.sync.fetch_job.is_none() && !self.sync.url.trim().is_empty();
+                if ui
+                    .add_enabled(can, egui::Button::new("Cargar URL"))
+                    .clicked()
+                {
+                    do_load_url = true;
+                }
+                if ui.button("Abrir archivo...").clicked() {
+                    do_open_file = true;
+                }
+            });
+            if self.sync.fetch_job.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Descargando manifest...");
+                });
             }
-            if let Some(p) = &self.sync.manifest_path {
-                ui.label(egui::RichText::new(p.display().to_string()).weak());
+            if !self.cfg.subscribed_sets.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Sets guardados (1 clic para re-sincronizar):").weak(),
+                );
+                for s in self.cfg.subscribed_sets.clone() {
+                    ui.horizontal(|ui| {
+                        if ui.button("Cargar").clicked() {
+                            load_saved = Some(s.clone());
+                        }
+                        if ui.small_button("borrar").clicked() {
+                            del_saved = Some(s.clone());
+                        }
+                        ui.label(egui::RichText::new(&s).weak());
+                    });
+                }
             }
         });
+
+        if do_load_url {
+            self.load_url(ctx);
+        }
+        if do_open_file {
+            self.open_manifest(ctx);
+        }
+        if let Some(s) = load_saved {
+            self.sync.url = s;
+            self.load_url(ctx);
+        }
+        if let Some(s) = del_saved {
+            self.cfg.subscribed_sets.retain(|x| *x != s);
+            let _ = config::save(&self.cfg);
+        }
+
         if let Some(e) = &self.sync.load_err {
             ui.colored_label(BAD, format!("Error: {e}"));
         }
         if let Some(m) = &self.sync.manifest {
+            ui.add_space(4.0);
             ui.label(egui::RichText::new(format!("{}  v{}", m.set_name, m.set_version)).strong());
+            if !self.sync.source.is_empty() {
+                ui.label(egui::RichText::new(&self.sync.source).weak());
+            }
             if let Some(bl) = &m.baselib_version {
                 ui.colored_label(WARN, format!("Requiere BaseLib {bl}."));
             }
@@ -1096,27 +1258,77 @@ impl App {
         else {
             return;
         };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => self.load_from_text(&text, path.display().to_string(), ctx),
+            Err(e) => self.sync.load_err = Some(format!("no se pudo leer: {e}")),
+        }
+    }
+
+    /// Baja el set-manifest de `self.sync.url` en un worker (no bloquea la UI).
+    fn load_url(&mut self, ctx: &egui::Context) {
+        let url = self.sync.url.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        self.sync.load_err = None;
+        let (tx, rx) = channel();
+        self.sync.fetch_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let res = transport::get_text(&url).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(res);
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_fetch_job(&mut self, ctx: &egui::Context) {
+        let res = match &self.sync.fetch_job {
+            Some(rx) => match rx.try_recv() {
+                Ok(r) => r,
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint();
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.sync.fetch_job = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.sync.fetch_job = None;
+        match res {
+            Ok(text) => {
+                let url = self.sync.url.trim().to_string();
+                self.load_from_text(&text, url.clone(), ctx);
+                // Guardar la suscripcion si cargo bien (1 clic para re-sincronizar despues).
+                if self.sync.load_err.is_none()
+                    && !url.is_empty()
+                    && !self.cfg.subscribed_sets.contains(&url)
+                {
+                    self.cfg.subscribed_sets.push(url);
+                    let _ = config::save(&self.cfg);
+                }
+            }
+            Err(e) => self.sync.load_err = Some(e),
+        }
+    }
+
+    /// Verifica firma (modo dev) + parsea el manifest + arranca el plan. `source` = etiqueta.
+    fn load_from_text(&mut self, text: &str, source: String, ctx: &egui::Context) {
         self.sync.load_err = None;
         self.sync.plan = None;
         self.sync.plan_job = None;
         self.sync.consent = false;
         self.sync.manifest = None;
-        self.sync.manifest_path = None;
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) => {
-                self.sync.load_err = Some(format!("no se pudo leer: {e}"));
-                return;
-            }
-        };
-        if let Err(e) = crate::signing::verify_with_embedded(&bytes, None) {
+        self.sync.source = source;
+        if let Err(e) = crate::signing::verify_with_embedded(text.as_bytes(), None) {
             self.sync.load_err = Some(format!("firma invalida: {e:#}"));
             return;
         }
-        match SetManifest::from_json_str(&String::from_utf8_lossy(&bytes)) {
+        match SetManifest::from_json_str(text) {
             Ok(m) => {
                 self.sync.manifest = Some(m);
-                self.sync.manifest_path = Some(path);
                 self.start_plan_job(ctx);
             }
             Err(e) => self.sync.load_err = Some(format!("{e:#}")),
@@ -1231,40 +1443,42 @@ impl App {
 }
 
 fn render_plan(ui: &mut egui::Ui, plan: &sync::Plan) {
-    ui.label(format!(
-        "Orden de instalacion: {}",
-        plan.install_order.join("  →  ")
-    ));
-    ui.label(format!(
-        "Orden de carga (multiplayer): {}",
-        plan.load_order.join("  →  ")
-    ));
-    if !plan.load_order_enforced {
-        ui.colored_label(
+    card(ui, "Plan de sincronizacion", |ui| {
+        ui.label(format!(
+            "Orden de instalacion: {}",
+            plan.install_order.join("  →  ")
+        ));
+        ui.label(format!(
+            "Orden de carga (multiplayer): {}",
+            plan.load_order.join("  →  ")
+        ));
+        if !plan.load_order_enforced {
+            ui.colored_label(
             WARN,
             "Falta ModListSorter en el set: los amigos pueden quedar con otro orden (room-hash).",
         );
-    }
-    ui.label(format!(
-        "A descargar: {} archivos  ({:.1} MB)  ·  al dia: {}",
-        plan.to_download.len(),
-        plan.bytes_to_download as f64 / 1.0e6,
-        plan.up_to_date.len()
-    ));
-    egui::ScrollArea::vertical()
-        .id_salt("planlist")
-        .max_height(140.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            for f in &plan.to_download {
-                ui.label(format!(
-                    "  + {}   ({:.1} KB)",
-                    f.path,
-                    f.size as f64 / 1024.0
-                ));
-            }
-            if !plan.orphans.is_empty() {
-                ui.colored_label(BAD, format!("Huerfanos a borrar: {}", plan.orphans.len()));
-            }
-        });
+        }
+        ui.label(format!(
+            "A descargar: {} archivos  ({:.1} MB)  ·  al dia: {}",
+            plan.to_download.len(),
+            plan.bytes_to_download as f64 / 1.0e6,
+            plan.up_to_date.len()
+        ));
+        egui::ScrollArea::vertical()
+            .id_salt("planlist")
+            .max_height(140.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for f in &plan.to_download {
+                    ui.label(format!(
+                        "  + {}   ({:.1} KB)",
+                        f.path,
+                        f.size as f64 / 1024.0
+                    ));
+                }
+                if !plan.orphans.is_empty() {
+                    ui.colored_label(BAD, format!("Huerfanos a borrar: {}", plan.orphans.len()));
+                }
+            });
+    });
 }

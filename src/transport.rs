@@ -61,41 +61,77 @@ impl ModSource for GitHubReleases {
     ) -> Result<()> {
         // Content-addressed: el asset remoto se llama por su BLAKE3 (no por la ruta local).
         let url = join_url(base_url, &entry.blake3);
-        let resp = self
-            .client
-            .get(&url)
+
+        // ¿Reanudar? Si el `.part` quedo a medias de un intento previo, pedimos solo el resto
+        // con HTTP Range (los `.pck` de 100+ MB no se rehacen desde cero).
+        let existing = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        let want_resume = entry.size != 0 && existing > 0 && existing < entry.size;
+
+        let mut req = self.client.get(&url);
+        if want_resume {
+            req = req.header(reqwest::header::RANGE, format!("bytes={existing}-"));
+        }
+        let resp = req
             .send()
             .with_context(|| format!("GET {url}"))?
             .error_for_status()
             .with_context(|| format!("descargando {} ({})", entry.path, entry.blake3))?;
 
-        let mut file =
-            std::fs::File::create(dest).with_context(|| format!("creando {}", dest.display()))?;
+        // 206 = el server respeto el Range (append); si no (200), bajamos de cero (truncate).
+        let resumed = want_resume && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+        let mut file = if resumed {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(dest)
+                .with_context(|| format!("reabriendo {}", dest.display()))?
+        } else {
+            std::fs::File::create(dest).with_context(|| format!("creando {}", dest.display()))?
+        };
+        if resumed {
+            on_bytes(existing); // contar lo ya bajado para la barra de progreso
+        }
+
         let mut reader = resp;
         let mut buf = vec![0u8; 64 * 1024];
-        let mut total = 0u64;
         loop {
             let n = reader.read(&mut buf).context("leyendo del servidor")?;
             if n == 0 {
                 break;
             }
             file.write_all(&buf[..n]).context("escribiendo a disco")?;
-            total += n as u64;
             on_bytes(n as u64);
         }
         file.flush().ok();
 
-        // Sanity de tamaño (el hash lo chequea apply). Atrapa "archivo equivocado en el
-        // release" o un 404 que devolvio HTML, antes de gastar el hash.
-        if entry.size != 0 && total != entry.size {
+        // Sanity de tamaño (el hash lo chequea apply). Atrapa "asset equivocado/faltante" o
+        // un 404 que devolvio HTML, antes de gastar el hash.
+        let final_size = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        if entry.size != 0 && final_size != entry.size {
             bail!(
-                "{}: bajados {total} bytes, esperaba {} (¿asset equivocado o faltante en el release?)",
+                "{}: tamaño final {final_size} bytes, esperaba {} (¿asset equivocado o faltante?)",
                 entry.path,
                 entry.size
             );
         }
         Ok(())
     }
+}
+
+/// GET de una URL y devuelve el body como texto. Para bajar el `set-manifest.json` desde
+/// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
+pub fn get_text(url: &str) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("construir cliente http")?;
+    let body = client
+        .get(url)
+        .send()
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("bajando {url}"))?
+        .text()?;
+    Ok(body)
 }
 
 /// Une `base` + `path` relativo con una sola `/`.

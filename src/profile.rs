@@ -152,6 +152,11 @@ mod tests {
 
     #[test]
     fn from_current_y_apply_mueven_carpetas() {
+        // apply() mueve carpetas via manager, que aborta si el juego corre.
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
         let base = std::env::temp_dir().join("sts2_modsync_profile_test");
         let _ = std::fs::remove_dir_all(&base);
         let mods_dir = base.join("mods");

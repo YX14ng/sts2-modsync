@@ -231,6 +231,11 @@ mod tests {
 
     #[test]
     fn apply_baja_verifica_y_renombra() {
+        // apply() aborta si el juego corre; este test necesita el juego cerrado.
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
         let base = std::env::temp_dir().join("sts2_modsync_apply_ok");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();

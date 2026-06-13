@@ -13,7 +13,8 @@ use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 use sts2_modsync::{
-    config, detect, launch, manager, manifest::SetManifest, modlist, profile, publish, sync, update,
+    config, detect, launch, manager, manifest::SetManifest, modlist, profile, publish, sync,
+    transport, update,
 };
 
 fn main() -> Result<()> {
@@ -52,10 +53,13 @@ fn main() -> Result<()> {
             println!("lanzando Slay the Spire 2...");
         }
         "publish" => cmd_publish(&install, &args)?,
-        "sync" => cmd_sync(&install, Path::new(arg(&args, 1)?))?,
-        // compat: `sts2-modsync algo.json` == `sync algo.json` (como el MVP viejo).
-        other if other.ends_with(".json") && Path::new(other).exists() => {
-            cmd_sync(&install, Path::new(other))?
+        "sync" => cmd_sync(&install, arg(&args, 1)?)?,
+        // compat: `sts2-modsync algo.json|http...` == `sync ...` (como el MVP viejo).
+        other
+            if (other.ends_with(".json") && Path::new(other).exists())
+                || other.starts_with("http") =>
+        {
+            cmd_sync(&install, other)?
         }
         other => {
             bail!("subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|help)")
@@ -129,9 +133,13 @@ fn cmd_list(install: &detect::Install) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sync(install: &detect::Install, manifest_path: &Path) -> Result<()> {
+fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
     print_install(install);
-    let manifest = SetManifest::from_json_file(manifest_path)?;
+    let manifest = if src.starts_with("http") {
+        SetManifest::from_json_str(&transport::get_text(src)?)?
+    } else {
+        SetManifest::from_json_file(Path::new(src))?
+    };
     println!(
         "\nSet: {} v{}  ({} mods)",
         manifest.set_name,
