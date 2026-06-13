@@ -2,29 +2,32 @@
 name = "sts2-modsync"
 version = "0.1.0"
 edition = "2024"
-description = "Detecta el install de Slay the Spire 2 (Steam o pirata) y sincroniza sets de mods de forma barata y rapida"
+description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
+default-run = "sts2-modsync"
 
 [dependencies]
 anyhow = "1.0.102"
 blake3 = { version = "1.8.5", features = ["rayon", "mmap"] }
 directories = "6.0.0"
+eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts"], optional = true }
 minisign-verify = "0.2.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rfd = "0.17.2"
+self-replace = "1.5.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 steamlocate = "2.1.0"
 sysinfo = "0.39.3"
 toml = "1.1.2"
+trash = "5.2.6"
 walkdir = "2.5.0"
+zip = "8.6.0"
 
-# --- FASE 2 (siguiente Claude Code) — descomentar al implementar transporte/GUI ---
-# reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
-# tokio        = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
-# futures-util = "0.3"
-# tempfile     = "3"          # escritura atomica (temp + persist en el mismo volumen)
-# zstd         = "0.13"       # comprimir transferencia
-# eframe       = "0.31"       # GUI (forzar backend glow); egui viene incluido
-# bita         = "0.14"       # FASE 3: delta intra-archivo del .pck (opcional)
+# reqwest (blocking + rustls) ya esta arriba: la descarga corre en el worker thread, asi
+# que NO hace falta tokio/futures-util (evitamos toda la superficie async).
+# --- FASE 3 (opcional) ---
+# zstd  = "0.13"   # comprimir transferencia
+# bita  = "0.14"   # delta intra-archivo del .pck
 
 [profile.release]
 opt-level = "z"
@@ -32,3 +35,15 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[features]
+# La GUI (eframe/egui) es opcional: asi `cargo build`/`cargo test` del core y la CLI
+# siguen livianos. La GUI se compila con `--features gui`.
+gui = ["dep:eframe"]
+
+# Binario de la GUI, gateado tras el feature `gui` (sin el, no se intenta compilar).
+# La CLI (`src/main.rs`) se auto-descubre aparte como el binario `sts2-modsync`.
+[[bin]]
+name = "sts2-modsync-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]

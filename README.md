@@ -1,11 +1,13 @@
 # sts2-modsync
 
-Herramienta de Windows (Rust) para **detectar** el install de *Slay the Spire 2* —
-incluyendo copias **fuera de Steam** (te deja elegir la carpeta) — y **sincronizar sets
-de mods** entre un modder y sus amigos, de forma **gratis y rapida**.
+**Mod manager de *Slay the Spire 2*** (Windows / Rust): detecta el install (Steam o copias
+**fuera de Steam**), **lista / habilita / deshabilita / instala / desinstala** mods, gestiona
+**perfiles** y el **orden de carga**, y **lanza** el juego. La **sincronizacion de sets** entre
+un modder y sus amigos (gratis y rapida, por hash) es **un modulo mas**. GUI + CLI.
 
-> Estado: **FASE 1** (core + MVP de linea de comandos). La descarga real, la GUI y el
-> delta del `.pck` son FASE 2 — ver [HANDOFF.md](HANDOFF.md).
+> Estado: mod manager funcional (GUI con pestañas Mods/Sync/Perfiles + CLI). La sync ya **baja e
+> instala de verdad** (`apply` transaccional + descarga de GitHub Releases, verificada por hash);
+> el delta intra-`.pck` es FASE 3 — ver [HANDOFF.md](HANDOFF.md).
 
 ## Como funciona (resumen)
 
@@ -21,11 +23,20 @@ de mods** entre un modder y sus amigos, de forma **gratis y rapida**.
 - Seguridad: el manifiesto se **firma** (minisign) y cada archivo se **verifica por hash**;
   la app exige el juego cerrado y aplica los cambios de forma transaccional.
 
-## Uso (MVP actual)
+## Uso
 
 ```sh
-cargo run                          # detecta el install y lo reporta
-cargo run -- set-manifest.example.json   # ademas muestra el PLAN de sync (dry-run)
+# GUI (mod manager con pestañas Mods / Sync / Perfiles):
+cargo run --features gui --bin sts2-modsync-gui
+
+# CLI:
+cargo run -- list                 # lista los mods instalados (default)
+cargo run -- enable  <id>         # habilita un mod (mueve la carpeta a mods/)
+cargo run -- disable <id>         # deshabilita un mod (a mods_disabled/)
+cargo run -- launch               # lanza el juego
+cargo run -- sync set-manifest.example.json   # dry-run del plan de sincronizacion
+cargo run -- publish --name "Mi Set" --version 0.0.1 \
+  --base-url https://github.com/USER/REPO/releases/download/0.0.1/ --out ./pub   # (modder)
 ```
 
 ## Build
@@ -43,12 +54,18 @@ cargo test
 | archivo | que hace |
 |---|---|
 | `src/detect.rs` | encontrar/validar el install (Steam + pirata + dialogo) |
-| `src/manifest.rs` | modelo del set-manifest + validacion + orden de dependencias |
+| `src/modlist.rs` | escanear/parsear los mods instalados (`<id>.json`), deps, orden de carga |
+| `src/manager.rs` | enable/disable/instalar/desinstalar (mover carpetas; juego cerrado) |
+| `src/profile.rs` | perfiles (conjuntos de mods habilitados) + puente con la sync |
+| `src/launch.rs` | lanzar el juego |
+| `src/manifest.rs` | modelo del **set-manifest** (sync) + validacion + orden de dependencias |
 | `src/hashing.rs` | BLAKE3 por archivo (delta gruesa) |
-| `src/sync.rs` | calcular el plan (bajar / al dia / huerfanos); `apply` = FASE 2 |
+| `src/sync.rs` | plan (bajar / al dia / huerfanos) + `apply` transaccional (baja/verifica/instala) |
+| `src/publish.rs` | generar set-manifest + assets desde tus mods (modo modder) |
 | `src/signing.rs` | verificar la firma minisign del manifiesto |
-| `src/transport.rs` | trait `ModSource`; impl GitHub Releases = FASE 2 |
+| `src/transport.rs` | descarga de GitHub Releases (reqwest blocking, content-addressed por blake3) |
 | `src/config.rs` | config local (`%APPDATA%/sts2-modsync/config.toml`) |
-| `src/main.rs` | MVP de linea de comandos |
+| `src/main.rs` | CLI con subcomandos (`list/enable/disable/launch/sync`) |
+| `src/gui.rs` | GUI mod manager: pestañas Mods/Sync/Perfiles (feature `gui`, bin `sts2-modsync-gui`) |
 
 Detalles de arquitectura, decisiones y proximos pasos: **[HANDOFF.md](HANDOFF.md)**.

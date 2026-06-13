@@ -18,6 +18,21 @@ use std::path::Path;
 /// Version del esquema del manifiesto (subir si cambia la forma).
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Libreria base: se carga SIEMPRE primero (la fija arriba BaseLib/ModListSorter).
+pub const BASELIB_ID: &str = "BaseLib";
+/// Mod que fuerza el orden de carga canonico (BaseLib + A-Z) al cerrar el juego. Debe
+/// estar en el set para que todos los amigos converjan al mismo orden -> mismo room-hash.
+pub const LOAD_ORDER_ENFORCER_ID: &str = "ModListSorter";
+
+/// Orden de carga canonico (BaseLib primero, el resto A-Z case-insensitive) sobre una
+/// coleccion de ids. Compartido por el set-manifest (sync) y el mod manager (`modlist`):
+/// es el orden que fuerza `ModListSorter` en runtime y alimenta el room-hash de BaseLib.
+pub fn canonical_order(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut ids: Vec<String> = ids.into_iter().collect();
+    ids.sort_by_key(|id| (id != BASELIB_ID, id.to_ascii_lowercase()));
+    ids
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetManifest {
     /// Version del esquema; debe ser <= SCHEMA_VERSION.
@@ -68,6 +83,8 @@ pub struct FileEntry {
 
 impl SetManifest {
     pub fn from_json_str(s: &str) -> Result<Self> {
+        // Saca un BOM UTF-8 si lo trae (editores en Windows lo agregan; rompe serde_json).
+        let s = s.trim_start_matches('\u{feff}');
         let m: SetManifest = serde_json::from_str(s).context("manifiesto JSON invalido")?;
         m.validate()?;
         Ok(m)
@@ -147,6 +164,21 @@ impl SetManifest {
     /// `mods/` es intocable.
     pub fn managed_ids(&self) -> BTreeSet<String> {
         self.mods.iter().map(|m| m.id.clone()).collect()
+    }
+
+    /// Orden de carga CANONICO para el room-hash de BaseLib en multiplayer: BaseLib
+    /// primero, el resto alfabetico A-Z (case-insensitive), igual que fuerza
+    /// `ModListSorter` al cerrar el juego. OJO: distinto de `install_order` (toposort de
+    /// dependencias) — no confundirlos. ModListSorter es la autoridad real en runtime;
+    /// esto es la vista/garantia del lado del sync (lo que vera multiplayer).
+    pub fn canonical_load_order(&self) -> Vec<String> {
+        canonical_order(self.managed_ids())
+    }
+
+    /// True si el set incluye el enforcer de orden (`ModListSorter`). Sin el en el set,
+    /// los amigos pueden quedar con otro orden -> room-hash distinto -> no entran al lobby.
+    pub fn syncs_load_order(&self) -> bool {
+        self.managed_ids().contains(LOAD_ORDER_ENFORCER_ID)
     }
 
     /// Orden de instalacion topologico (dependencias primero). Error si hay ciclo.
@@ -275,5 +307,31 @@ mod tests {
     fn dependencia_inexistente_es_error() {
         let m = manifest(vec![mod_with("A", &["NoExiste"], &["A/x"])]);
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn canonical_load_order_pone_baselib_primero_y_resto_az() {
+        let m = manifest(vec![
+            mod_with("FGOCore", &[], &["FGOCore/a.dll"]),
+            mod_with("BaseLib", &[], &["BaseLib/a.dll"]),
+            mod_with("ModListSorter", &[], &["ModListSorter/a.dll"]),
+            mod_with("Acheron", &[], &["Acheron/a.dll"]),
+        ]);
+        let expected: Vec<String> = ["BaseLib", "Acheron", "FGOCore", "ModListSorter"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(m.canonical_load_order(), expected);
+    }
+
+    #[test]
+    fn syncs_load_order_detecta_modlistsorter() {
+        let con = manifest(vec![
+            mod_with("BaseLib", &[], &["BaseLib/a.dll"]),
+            mod_with("ModListSorter", &[], &["ModListSorter/a.dll"]),
+        ]);
+        assert!(con.syncs_load_order());
+        let sin = manifest(vec![mod_with("BaseLib", &[], &["BaseLib/a.dll"])]);
+        assert!(!sin.syncs_load_order());
     }
 }

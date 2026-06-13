@@ -6,10 +6,14 @@ esta destilado para que NO tengas que re-investigar.
 
 ## Que es
 
-App de escritorio en **Rust para Windows** que (1) **detecta** donde esta instalado Slay
-the Spire 2 — o deja al usuario **elegir la carpeta** (porque varios la tienen PIRATA,
-fuera de Steam) — y (2) **sincroniza sets de mods** (un modder publica; sus amigos bajan/
-actualizan). Requisito del usuario: que sea **rapido y barato**.
+App de escritorio en **Rust para Windows**. Empezo como sincronizador de sets y ahora es un
+**mod manager completo de StS2** (lista/enable/disable/instalar/desinstalar/perfiles/lanzar +
+orden de carga), donde la **sync es un modulo mas**. Sigue (1) **detectando** el install
+— o dejando **elegir la carpeta** (varios la tienen PIRATA, fuera de Steam) — y (2)
+**sincronizando sets de mods** (un modder publica; sus amigos bajan/actualizan), **rapido y
+barato**. La arquitectura actual (modulos `modlist`/`manager`/`profile`/`launch` + el GUI con
+pestañas) esta en **CLAUDE.md**; abajo queda el research de la sync (transporte/seguridad/fases),
+que sigue vigente para FASE 2.
 
 ## Estado actual — FASE 1 (HECHA, compila: `cargo check` verde)
 
@@ -62,6 +66,14 @@ Reglas de seguridad codificadas en `SetManifest::validate`:
   sin raiz absoluta (cierra path-traversal que escaparia a sobreescribir archivos del juego).
 - `dependencies` -> `install_order()` topologico (BaseLib -> FGOCore -> personajes). El set
   DEBE incluir las librerias compartidas como entradas propias.
+- **Orden de carga (multiplayer) != toposort.** BaseLib calcula un *room-hash* con los mods
+  cargados + su ORDEN; si difiere entre amigos, el juego los bloquea del lobby del otro. El orden
+  canonico es **BaseLib primero, el resto A-Z** (lo fuerza el mod **`ModListSorter`** al cerrar el
+  juego). El set DEBE incluir `ModListSorter`; el cliente lo deriva con
+  `SetManifest::canonical_load_order()` y advierte (CLI/GUI) si falta (`syncs_load_order()`). El
+  orden + enabled viven en `setting.save` (save de Godot) — **NO lo tocamos** (fragil, atado a la
+  version; habria que reversear el formato): confiamos en ModListSorter como enforcer en cada
+  maquina. `ModSyncChecker` es la contraparte in-game (compara lista/orden/hash con el host).
 
 ## Modelo de seguridad (esto baja DLLs que el juego EJECUTA — no es opcional)
 
@@ -92,33 +104,41 @@ Riesgos verificados (mitigar al implementar `apply`):
 
 ## FASE 2 — lo que sigue (en orden)
 
-Descomenta en `Cargo.toml` las deps de FASE 2 (versiones/features ya elegidas):
-```
-reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
-tokio        = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
-futures-util = "0.3"
-tempfile     = "3"
-zstd         = "0.13"
-eframe       = "0.31"   # GUI; forzar backend glow en NativeOptions (drivers viejos de amigos)
-```
-⚠️ El research alucino algunos patch (dijo reqwest 0.13.4 / egui 0.34.3 / tokio 1.52 — NO
-existen): usa `cargo add` para resolver la version real (asi se hizo con el core).
+Deps ya agregadas: `reqwest` 0.12 (**blocking** + rustls), `eframe` (feature `gui`), `zip`/`trash`
+(manager). Se uso reqwest **BLOCKING** (no async): la descarga corre en el worker thread del GUI,
+asi que **no hizo falta tokio/futures-util**. Tampoco `tempfile`: los `.part` van en la carpeta
+destino (mismo volumen). FASE 3: `zstd`/`bita` siguen comentadas.
+⚠️ `cargo add` para resolver versiones (NO hardcodear): reqwest 0.13 cambio el nombre del feature
+TLS, por eso se fijo 0.12 (tiene `rustls-tls`+`blocking`); egui 0.34.3 resulto real.
 
-1. **Transporte** (`transport.rs`): implementar `GitHubReleases::fetch` con reqwest+rustls
-   (sin OpenSSL en MSVC), `bytes_stream()` para progreso, HTTP Range para reanudar sobre `.part`,
-   verificar BLAKE3. Descargas concurrentes con `futures_util::StreamExt::buffer_unordered(N)`.
-2. **apply()** (`sync.rs`): transaccion all-or-nothing (todo a `.part` + verificado, luego
-   renames atomicos con `tempfile` en el MISMO volumen — cross-device falla en Windows),
-   borrado de huerfanos con backup, en orden topologico, abortando si el juego corre.
-3. **GUI** (`eframe`/egui, single-exe): 3 pantallas (detectar/elegir carpeta -> revisar set y
-   confirmar -> progreso). egui es immediate-mode: descargas/hashing en hilo tokio aparte,
-   progreso por canal + `ctx.request_repaint()`. NO bloquear el loop. Reusa todo el core.
-4. **Modo PUBLICAR** (modder): generar el set-manifest (hashear `mods/<ids>/`), firmar con
-   minisign, y subir a un GitHub Release (`gh release upload` o `octocrab`).
+1. **Transporte** ✅ HECHO (`transport.rs`): `GitHubReleases::fetch` con `reqwest::blocking`+rustls
+   (sin OpenSSL en MSVC), baja por `browser_download_url` directo con callback de progreso por chunk
+   + chequeo de tamaño. (Sin HTTP Range/resume aun: el `.part` se rehace; resume = mejora futura.)
+2. **apply()** ✅ HECHO (`sync.rs`): transaccion all-or-nothing — baja TODO a `.part` + verifica
+   BLAKE3, recien entonces renombra (orden topologico); huerfanos a la papelera (`trash`); aborta si
+   el juego corre. Tests con `ModSource` falso (`GoodSource`/`BadSource`, sin red).
+3. **GUI** ✅ HECHO (`src/gui.rs`, feature `gui`, bin `sts2-modsync-gui`): 3 pantallas
+   (detectar/elegir -> revisar+consentir -> progreso) immediate-mode, con worker en hilo +
+   canal `mpsc` + `ctx.request_repaint()` ya cableado (el hashing del plan corre off-UI). La
+   pantalla 3 llama a `apply()` (stub) — se vuelve real al terminar #1-#2. OJO: eframe 0.34
+   usa `App::ui(&mut self, ui, frame)` (no `update`); paneles via `show_inside`. Reusa el core.
+4. **Modo PUBLICAR** ✅ HECHO (`src/publish.rs`, CLI `publish` + pestaña Publicar): `prepare()`
+   hashea los mods elegidos -> set-manifest + assets; `write_out()` escribe
+   `out/set-manifest.json` + `out/assets/<blake3>`; `gh_hint()` imprime el `gh release create`.
+   **OJO esquema CONTENT-ADDRESSED:** los assets de un Release son PLANOS y GitHub sanitiza
+   nombres, asi que NO se puede subir "BaseLib/BaseLib.dll". El asset se llama por su **blake3**
+   (`transport` baja por `base_url + entry.blake3`; `entry.path` queda solo para instalar local).
+   Da dedup gratis. **Firma:** v1 va SIN firmar (dev mode alcanza entre amigos); integrar
+   sign/keygen (crate `minisign`) = follow-up. Subir auto via `gh` desde la app = follow-up.
 
 ## FASE 3 — opcional
 - Delta intra-archivo del `.pck` con `bita` (verificar el supuesto de Godot primero).
-- Auto-update del propio `.exe` (`self_update` desde GitHub Releases).
+- **Auto-update ✅ HECHO** (`src/update.rs`): chequea el ultimo release de `YX14ng/sts2-modsync`,
+  compara con `CARGO_PKG_VERSION`, baja el `.zip`, extrae `sts2-modsync-gui.exe`, `self-replace`
+  (reemplaza el exe en uso) y relanza. GUI = banner "Actualizar ahora"; CLI = `update`. El repo es
+  PUBLICO; el CI (`.github/workflows/release.yml`) publica el zip al pushear un tag `vX.Y.Z` (eso es
+  lo que come el auto-update). Seguridad: baja/ejecuta un binario del PROPIO release por HTTPS
+  (ancla = dueño del repo). HTTP Range/resume del transporte sigue pendiente.
 - Mirror Cloudflare R2.
 
 ## Stack elegido (verdicts del research)

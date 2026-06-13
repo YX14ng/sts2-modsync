@@ -21,3 +21,9 @@ config.local.toml
 .idea/
 Thumbs.db
 desktop.ini
+
+# Config del agente (Claude Code) — no se versiona
+/.claude/
+
+# Salida de publicar sets (sts2-modsync publish)
+/set-publish/

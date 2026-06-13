@@ -1,0 +1,282 @@
+//! Mod manager — modelo + escaneo de los mods INSTALADOS en `<StS2>/mods` (habilitados)
+//! y `<StS2>/mods_disabled` (deshabilitados). El artefacto que se lee aca es el
+//! `<id>.json` que cada mod trae PARA EL JUEGO (`ModManifest`) — NO confundir con el
+//! `manifest::SetManifest` (artefacto de la sync). Este modulo es **solo-lectura**; las
+//! mutaciones (enable/disable/install/uninstall) viven en `manager`.
+
+use crate::detect::Install;
+use crate::manifest::{LOAD_ORDER_ENFORCER_ID, canonical_order};
+use anyhow::Result;
+use serde::Deserialize;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
+
+/// Directorio hermano de `mods/` donde van los mods DESHABILITADOS (el juego NO lo
+/// escanea). Definido aca y reusado por `manager`.
+pub const DISABLED_DIRNAME: &str = "mods_disabled";
+
+/// El `<id>.json` (o legacy `mod_manifest.json`) que un mod trae para el juego. Campos
+/// laxos: los mods reales varian, asi que todo menos `id` es opcional / con default.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModManifest {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub has_dll: bool,
+    #[serde(default)]
+    pub has_pck: bool,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub affects_gameplay: bool,
+}
+
+impl ModManifest {
+    /// Nombre legible (cae al id si el manifiesto no trae `name`).
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+}
+
+/// Un mod instalado en disco (habilitado o no).
+#[derive(Debug, Clone)]
+pub struct InstalledMod {
+    pub manifest: ModManifest,
+    /// Carpeta del mod (`mods/<id>` o `mods_disabled/<id>`).
+    pub dir: PathBuf,
+    pub enabled: bool,
+    pub size_bytes: u64,
+}
+
+impl InstalledMod {
+    pub fn id(&self) -> &str {
+        &self.manifest.id
+    }
+}
+
+/// `<root>/mods_disabled` (hermano de `mods/`).
+pub fn disabled_dir(install: &Install) -> PathBuf {
+    install
+        .mods_dir
+        .parent()
+        .unwrap_or(&install.mods_dir)
+        .join(DISABLED_DIRNAME)
+}
+
+/// Escanea mods habilitados (`mods/`) + deshabilitados (`mods_disabled/`). Ignora
+/// carpetas sin un manifiesto parseable. Ordena por nombre legible (case-insensitive).
+pub fn scan(install: &Install) -> Result<Vec<InstalledMod>> {
+    let mut mods = Vec::new();
+    scan_dir(&install.mods_dir, true, &mut mods);
+    scan_dir(&disabled_dir(install), false, &mut mods);
+    mods.sort_by_key(|m| m.manifest.display_name().to_ascii_lowercase());
+    Ok(mods)
+}
+
+fn scan_dir(dir: &Path, enabled: bool, out: &mut Vec<InstalledMod>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Some(manifest) = read_manifest(&path) {
+            out.push(InstalledMod {
+                manifest,
+                size_bytes: dir_size(&path),
+                dir: path,
+                enabled,
+            });
+        }
+    }
+}
+
+/// Busca el manifiesto del mod en su carpeta: `<carpeta>.json` -> `mod_manifest.json`
+/// (legacy) -> primer `*.json` que parsee como `ModManifest`. `None` si no hay ninguno
+/// (la carpeta no es un mod). Reusado por `manager` al instalar.
+pub fn read_manifest(mod_dir: &Path) -> Option<ModManifest> {
+    let folder = mod_dir.file_name()?.to_string_lossy().to_string();
+    let mut candidates: Vec<PathBuf> = vec![
+        mod_dir.join(format!("{folder}.json")),
+        mod_dir.join("mod_manifest.json"),
+    ];
+    if let Ok(rd) = std::fs::read_dir(mod_dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "json") {
+                candidates.push(p);
+            }
+        }
+    }
+    for c in candidates {
+        // trim_start: varios `<id>.json` (p.ej. BaseLib) vienen con BOM UTF-8, que rompe
+        // serde_json. Lo sacamos antes de parsear.
+        if let Ok(txt) = std::fs::read_to_string(&c)
+            && let Ok(m) = serde_json::from_str::<ModManifest>(txt.trim_start_matches('\u{feff}'))
+        {
+            return Some(m);
+        }
+    }
+    None
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Pares (mod, dependencia) donde la dependencia no esta presente y HABILITADA. Solo
+/// para mods habilitados (un mod deshabilitado no carga; su dep no importa).
+pub fn missing_dependencies(mods: &[InstalledMod]) -> Vec<(String, String)> {
+    let enabled: BTreeSet<&str> = mods.iter().filter(|m| m.enabled).map(|m| m.id()).collect();
+    let mut out = Vec::new();
+    for m in mods.iter().filter(|m| m.enabled) {
+        for dep in &m.manifest.dependencies {
+            if !enabled.contains(dep.as_str()) {
+                out.push((m.id().to_string(), dep.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Ids que aparecen mas de una vez (p.ej. la misma carpeta en `mods/` y `mods_disabled/`,
+/// o dos mods declarando el mismo id). Util como warning de conflicto.
+pub fn conflicts(mods: &[InstalledMod]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut dup = BTreeSet::new();
+    for m in mods {
+        if !seen.insert(m.id()) {
+            dup.insert(m.id().to_string());
+        }
+    }
+    dup.into_iter().collect()
+}
+
+/// Orden de carga canonico (BaseLib + A-Z) sobre los mods HABILITADOS — lo que alimenta
+/// el room-hash de multiplayer (reusa `manifest::canonical_order`).
+pub fn load_order(mods: &[InstalledMod]) -> Vec<String> {
+    canonical_order(
+        mods.iter()
+            .filter(|m| m.enabled)
+            .map(|m| m.id().to_string()),
+    )
+}
+
+/// True si `ModListSorter` esta presente y HABILITADO (el enforcer del orden). Sin el, el
+/// orden de carga puede divergir entre amigos -> no entran al lobby (room-hash distinto).
+pub fn load_order_enforced(mods: &[InstalledMod]) -> bool {
+    mods.iter()
+        .any(|m| m.enabled && m.id() == LOAD_ORDER_ENFORCER_ID)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn im(id: &str, enabled: bool, deps: &[&str]) -> InstalledMod {
+        InstalledMod {
+            manifest: ModManifest {
+                id: id.into(),
+                name: None,
+                author: None,
+                description: None,
+                version: None,
+                has_dll: false,
+                has_pck: false,
+                dependencies: deps.iter().map(|s| s.to_string()).collect(),
+                affects_gameplay: false,
+            },
+            dir: PathBuf::from(id),
+            enabled,
+            size_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn missing_deps_solo_cuenta_habilitados() {
+        let mods = vec![
+            im("FGOCore", true, &["BaseLib"]),
+            im("BaseLib", false, &[]), // presente pero DESHABILITADO -> sigue faltando
+            im("Solo", true, &["NoExiste"]),
+        ];
+        let missing = missing_dependencies(&mods);
+        assert!(missing.contains(&("FGOCore".into(), "BaseLib".into())));
+        assert!(missing.contains(&("Solo".into(), "NoExiste".into())));
+    }
+
+    #[test]
+    fn load_order_canonico_solo_habilitados() {
+        let mods = vec![
+            im("FGOCore", true, &[]),
+            im("BaseLib", true, &[]),
+            im("Acheron", false, &[]), // deshabilitado -> no entra al orden
+            im("ModListSorter", true, &[]),
+        ];
+        assert_eq!(
+            load_order(&mods),
+            ["BaseLib", "FGOCore", "ModListSorter"]
+                .map(String::from)
+                .to_vec()
+        );
+        assert!(load_order_enforced(&mods));
+        let sin = vec![im("BaseLib", true, &[])];
+        assert!(!load_order_enforced(&sin));
+    }
+
+    #[test]
+    fn scan_lee_habilitados_y_deshabilitados() {
+        let base = std::env::temp_dir().join("sts2_modsync_scan_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let mods_dir = base.join("mods");
+        let disabled = base.join(DISABLED_DIRNAME);
+        // mod habilitado con <id>.json — CON BOM UTF-8 (como el BaseLib real), para
+        // cubrir que el scan lo tolere.
+        std::fs::create_dir_all(mods_dir.join("BaseLib")).unwrap();
+        std::fs::write(
+            mods_dir.join("BaseLib").join("BaseLib.json"),
+            "\u{feff}".to_string() + r#"{"id":"BaseLib","name":"BaseLib","has_dll":true}"#,
+        )
+        .unwrap();
+        // mod deshabilitado con mod_manifest.json (legacy)
+        std::fs::create_dir_all(disabled.join("OldMod")).unwrap();
+        std::fs::write(
+            disabled.join("OldMod").join("mod_manifest.json"),
+            r#"{"id":"OldMod"}"#,
+        )
+        .unwrap();
+        // carpeta sin manifiesto -> se ignora
+        std::fs::create_dir_all(mods_dir.join("NoManifest")).unwrap();
+
+        let install = Install {
+            root: base.clone(),
+            mods_dir,
+            version: None,
+            source: crate::detect::Source::Manual,
+        };
+        let mut mods = scan(&install).unwrap();
+        mods.sort_by(|a, b| a.id().cmp(b.id()));
+        assert_eq!(mods.len(), 2);
+        let baselib = mods.iter().find(|m| m.id() == "BaseLib").unwrap();
+        assert!(baselib.enabled && baselib.manifest.has_dll);
+        let old = mods.iter().find(|m| m.id() == "OldMod").unwrap();
+        assert!(!old.enabled);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

@@ -1,0 +1,37 @@
+name: release
+
+# Publica el .zip del programa al pushear un tag vX.Y.Z. Lo consume el auto-update
+# (update.rs busca el asset .zip del ultimo release). Para sacar una version:
+#   1) subir la version en Cargo.toml
+#   2) git tag vX.Y.Z && git push origin vX.Y.Z
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # crear el release
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release (CLI + GUI)
+        run: cargo build --release --features gui --bin sts2-modsync-gui --bin sts2-modsync
+
+      - name: Empaquetar el zip
+        run: |
+          Compress-Archive -Path target/release/sts2-modsync-gui.exe, target/release/sts2-modsync.exe -DestinationPath sts2-modsync-windows-x86_64.zip -Force
+
+      - name: Crear el GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create ${{ github.ref_name }} sts2-modsync-windows-x86_64.zip --title ${{ github.ref_name }} --generate-notes

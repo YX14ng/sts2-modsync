@@ -34,6 +34,15 @@
         { "path": "MashShielder/MashShielder.dll", "size": 196608, "blake3": "5555555555555555555555555555555555555555555555555555555555555555" },
         { "path": "MashShielder/MashShielder.pck", "size": 141557760, "blake3": "6666666666666666666666666666666666666666666666666666666666666666" }
       ]
+    },
+    {
+      "id": "ModListSorter",
+      "version": "0.1",
+      "dependencies": ["BaseLib"],
+      "files": [
+        { "path": "ModListSorter/ModListSorter.json", "size": 225, "blake3": "7777777777777777777777777777777777777777777777777777777777777777" },
+        { "path": "ModListSorter/ModListSorter.dll", "size": 16384, "blake3": "8888888888888888888888888888888888888888888888888888888888888888" }
+      ]
     }
   ]
 }
