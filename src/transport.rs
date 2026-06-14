@@ -157,3 +157,22 @@ fn join_url(base: &str, path: &str) -> String {
         path.trim_start_matches('/')
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_url_normaliza_la_barra() {
+        assert_eq!(join_url("https://x/", "abc"), "https://x/abc");
+        assert_eq!(join_url("https://x", "abc"), "https://x/abc");
+        assert_eq!(join_url("https://x/", "/abc"), "https://x/abc");
+        assert_eq!(join_url("https://x///", "//abc"), "https://x/abc");
+    }
+
+    #[test]
+    fn get_text_rechaza_http_inseguro() {
+        // Falla ANTES de tocar la red (la verificacion de http:// es lo primero).
+        assert!(get_text("http://example/set-manifest.json").is_err());
+    }
+}

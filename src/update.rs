@@ -52,9 +52,14 @@ pub fn check_latest() -> Result<Option<Release>> {
     }
     let body = resp.error_for_status().context("github api")?.text()?;
     let arr: Vec<serde_json::Value> = serde_json::from_str(&body).context("json invalido")?;
+    Ok(pick_best_release(&arr).and_then(release_from_json))
+}
 
-    let best = arr
-        .iter()
+/// Elige el release de MAYOR version con tag `vX.Y.Z` (ignora drafts y tags que NO empiezan
+/// con `v`, p.ej. releases de SETS DE MODS tipo `2026.06.14` publicados en el mismo repo).
+/// Helper testeable de `check_latest`.
+fn pick_best_release(arr: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    arr.iter()
         .filter(|r| {
             !r.get("draft")
                 .and_then(serde_json::Value::as_bool)
@@ -71,9 +76,7 @@ pub fn check_latest() -> Result<Option<Release>> {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or(""),
             )
-        });
-
-    Ok(best.and_then(release_from_json))
+        })
 }
 
 /// Construye un `Release` a partir del JSON de un release de la API de GitHub.
@@ -222,5 +225,65 @@ mod tests {
         assert!(!is_newer("0.1.0", "0.2.0"));
         // los sufijos -pre se ignoran (simplificacion): mismo core => no es mayor.
         assert!(!is_newer("0.1.0-rc1", "0.1.0"));
+    }
+
+    #[test]
+    fn pick_best_release_ignora_drafts_y_tags_no_v() {
+        let arr = vec![
+            serde_json::json!({ "tag_name": "v0.2.0" }),
+            serde_json::json!({ "tag_name": "2026.06.14" }), // set de mods -> ignorar
+            serde_json::json!({ "tag_name": "v0.3.0", "draft": true }), // draft -> ignorar
+            serde_json::json!({ "tag_name": "v0.2.3" }),     // este es el mayor v* no-draft
+            serde_json::json!({ "tag_name": "v0.1.0" }),
+            serde_json::json!({ "name": "sin tag" }),
+        ];
+        let best = pick_best_release(&arr).unwrap();
+        assert_eq!(best.get("tag_name").unwrap().as_str().unwrap(), "v0.2.3");
+
+        // Solo un release de set de mods (no-v) => None (no dispara update falso).
+        let solo_mods = vec![serde_json::json!({ "tag_name": "2026.06.14" })];
+        assert!(pick_best_release(&solo_mods).is_none());
+    }
+
+    #[test]
+    fn release_from_json_extrae_tag_version_y_zip() {
+        let v = serde_json::json!({
+            "tag_name": "v0.2.3",
+            "body": "notas",
+            "html_url": "https://github.com/x/y/releases/tag/v0.2.3",
+            "assets": [
+                { "name": "leeme.txt", "browser_download_url": "https://x/leeme.txt" },
+                { "name": "sts2-modsync-windows-x86_64.zip", "browser_download_url": "https://x/app.zip" }
+            ]
+        });
+        let rel = release_from_json(&v).unwrap();
+        assert_eq!(rel.tag, "v0.2.3");
+        assert_eq!(rel.version, "0.2.3"); // sin la 'v'
+        assert_eq!(rel.zip_url, "https://x/app.zip"); // primer asset .zip
+        // sin tag => None.
+        assert!(release_from_json(&serde_json::json!({ "body": "x" })).is_none());
+    }
+
+    #[test]
+    fn extract_named_saca_por_basename() {
+        // Arma un zip en memoria con el exe anidado y lo extrae por basename.
+        let mut buf = Vec::new();
+        {
+            use std::io::Write;
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("otra.txt", opts).unwrap();
+            zw.write_all(b"ruido").unwrap();
+            zw.start_file("carpeta/sts2-modsync-gui.exe", opts).unwrap();
+            zw.write_all(b"BINARIO-FALSO").unwrap();
+            zw.finish().unwrap();
+        }
+        let dest = std::env::temp_dir().join("sts2_modsync_extract_test.exe");
+        let _ = std::fs::remove_file(&dest);
+        extract_named(&buf, ASSET_EXE, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"BINARIO-FALSO");
+        // un nombre que no esta -> error.
+        assert!(extract_named(&buf, "no-existe.exe", &dest).is_err());
+        let _ = std::fs::remove_file(&dest);
     }
 }

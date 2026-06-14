@@ -199,3 +199,86 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .unwrap_or(0);
     std::env::temp_dir().join(format!("{prefix}_{nanos}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::detect::{Install, Source};
+
+    #[test]
+    fn safe_id_rechaza_traversal_y_acepta_normal() {
+        for bad in [
+            "", "..", ".", "a/b", "a\\b", "C:evil", "../x", "x\\..", "/abs",
+        ] {
+            assert!(safe_id(bad).is_err(), "deberia rechazar {bad:?}");
+        }
+        assert_eq!(safe_id("BaseLib").unwrap(), "BaseLib");
+        assert_eq!(safe_id("FGO_Core-1.2").unwrap(), "FGO_Core-1.2");
+    }
+
+    fn make_mod(dir: &Path, id: &str) {
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(
+            dir.join(id).join(format!("{id}.json")),
+            format!(r#"{{"id":"{id}"}}"#),
+        )
+        .unwrap();
+    }
+
+    fn temp_install(name: &str) -> Install {
+        let base = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&base);
+        let mods_dir = base.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        Install {
+            root: base,
+            mods_dir,
+            version: None,
+            source: Source::Manual,
+        }
+    }
+
+    #[test]
+    fn enable_disable_round_trip() {
+        // enable/disable exigen el juego cerrado (mueven carpetas).
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_endis");
+        make_mod(&install.mods_dir, "Mod");
+
+        disable(&install, "Mod").unwrap();
+        assert!(!install.mods_dir.join("Mod").exists());
+        assert!(disabled_dir(&install).join("Mod").is_dir());
+
+        enable(&install, "Mod").unwrap();
+        assert!(install.mods_dir.join("Mod").is_dir());
+        assert!(!disabled_dir(&install).join("Mod").exists());
+
+        // disable de algo que no esta habilitado -> error.
+        assert!(disable(&install, "NoExiste").is_err());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn install_from_dir_copia_y_respeta_no_overwrite() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_install");
+        // carpeta fuente con un mod valido, FUERA de mods/.
+        let src_parent = install.root.join("incoming");
+        make_mod(&src_parent, "Mod"); // crea incoming/Mod/Mod.json
+        let src = src_parent.join("Mod");
+
+        let id = install_from_dir(&install, &src, false).unwrap();
+        assert_eq!(id, "Mod");
+        assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+
+        // segunda vez sin overwrite -> error (ya existe).
+        assert!(install_from_dir(&install, &src, false).is_err());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+}
