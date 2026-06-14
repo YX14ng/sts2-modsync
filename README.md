@@ -14,8 +14,9 @@ un modder y sus amigos (gratis y rapida, por hash) es **un modulo mas**. GUI + C
 
 1. Baja el ultimo **[Release](https://github.com/YX14ng/sts2-modsync/releases/latest)**:
    `sts2-modsync-windows-x86_64.zip`.
-2. Descomprimi y corre **`sts2-modsync-gui.exe`** — es portable, no necesita instalador. (El
-   `.zip` trae tambien `sts2-modsync.exe`, la version de linea de comandos.)
+2. Descomprimi y corre **`sts2-modsync.exe`** — es **un solo ejecutable** portable, sin instalador.
+   Doble-clic lo abre como app (GUI); el MISMO `.exe` con subcomandos es la CLI
+   (`sts2-modsync.exe list`, `... publish ...`, etc.).
 3. La primera vez detecta Slay the Spire 2 solo (Steam o por rutas comunes); si no lo halla, te
    abre un dialogo para elegir la carpeta del juego.
 4. La app se **auto-actualiza** sola desde GitHub Releases (verifica firma y que el binario nuevo
@@ -45,7 +46,7 @@ un modder y sus amigos (gratis y rapida, por hash) es **un modulo mas**. GUI + C
 
 ```sh
 # GUI (mod manager con pestañas Mods / Sync / Perfiles):
-cargo run --features gui --bin sts2-modsync-gui
+cargo run --features gui          # sin argumentos -> abre la GUI (single-exe)
 
 # CLI:
 cargo run -- list                 # lista los mods instalados (default)
@@ -84,6 +85,6 @@ cargo test
 | `src/transport.rs` | descarga de GitHub Releases (reqwest blocking, content-addressed por blake3) |
 | `src/config.rs` | config local (`%APPDATA%/sts2-modsync/config.toml`) |
 | `src/main.rs` | CLI con subcomandos (`list/enable/disable/launch/sync`) |
-| `src/gui.rs` | GUI mod manager: pestañas Mods/Sync/Perfiles (feature `gui`, bin `sts2-modsync-gui`) |
+| `src/gui.rs` | GUI mod manager: pestañas Mods/Sync/Perfiles (feature `gui`; la abre `main` sin args) |
 
 Detalles de arquitectura, decisiones y proximos pasos: **[HANDOFF.md](HANDOFF.md)**.

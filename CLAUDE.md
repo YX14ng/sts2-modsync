@@ -76,7 +76,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 
 ## Comandos
 
-- GUI (mod manager): `cargo run --features gui --bin sts2-modsync-gui` (pestañas Mods/Sync/Perfiles/Publicar).
+- GUI (mod manager): `cargo run --features gui` SIN argumentos (single-exe: el mismo binario
+  `sts2-modsync` abre la GUI si no hay subcomandos). Pestañas Mods/Sync/Perfiles/Publicar.
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json>` (dry-run)
   · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>] [--no-upload]`
     (modder; por default SUBE al Release via `gh`, `--no-upload` solo genera local)

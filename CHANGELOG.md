@@ -3,6 +3,20 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.1.0] - 2026-06-14 — Un solo ejecutable (post-1.0 #1)
+
+- **Single-exe:** ahora hay UN solo binario `sts2-modsync.exe` (antes eran dos:
+  `sts2-modsync-gui.exe` + `sts2-modsync.exe`). Doble-clic (sin argumentos) lo abre como app
+  (GUI); el mismo `.exe` con subcomandos es la CLI (`list`, `publish`, `sign`, etc.).
+- En Windows usa el subsistema `windows` (no abre una consola negra al lanzar el GUI) y, en modo
+  CLI, se engancha a la consola del padre (`AttachConsole`) para que la salida sea visible desde
+  una terminal. El build liviano sin la feature `gui` sigue siendo una CLI de consola normal.
+- El auto-update y los workflows de CI/release ahora producen/consumen ese unico `.exe`.
+
+> **Migracion desde 1.0.0:** el auto-update de 1.0.0 buscaba `sts2-modsync-gui.exe` en el zip del
+> release; el zip de 1.1.0 ya no lo trae, asi que **quien este en el .exe de 1.0.0 tiene que bajar
+> 1.1.0 a mano una vez**. Desde 1.1.0 el auto-update vuelve a funcionar solo.
+
 ## [1.0.0] - 2026-06-14 — Primera version estable
 
 Cierre del roadmap a 1.0: el flujo central (detectar, mod manager, sync transaccional firmado,

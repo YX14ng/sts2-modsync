@@ -11,8 +11,9 @@ use std::path::Path;
 
 const OWNER: &str = "YX14ng";
 const REPO: &str = "sts2-modsync";
-/// Exe (dentro del zip del release) que se extrae y reemplaza al actualizar el GUI.
-const ASSET_EXE: &str = "sts2-modsync-gui.exe";
+/// Exe (dentro del zip del release) que se extrae y reemplaza al actualizar. Single-exe:
+/// es el unico binario (`sts2-modsync.exe`), el mismo que abre la GUI.
+const ASSET_EXE: &str = "sts2-modsync.exe";
 const UA: &str = concat!("sts2-modsync/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone)]
@@ -324,7 +325,7 @@ mod tests {
             let opts = zip::write::SimpleFileOptions::default();
             zw.start_file("otra.txt", opts).unwrap();
             zw.write_all(b"ruido").unwrap();
-            zw.start_file("carpeta/sts2-modsync-gui.exe", opts).unwrap();
+            zw.start_file("carpeta/sts2-modsync.exe", opts).unwrap();
             zw.write_all(b"BINARIO-FALSO").unwrap();
             zw.finish().unwrap();
         }

@@ -1,6 +1,6 @@
 [package]
 name = "sts2-modsync"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 license = "MIT"
 description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
@@ -47,9 +47,6 @@ gui = ["dep:eframe", "p2p"]
 # `cargo test` no arrastra tokio/red. Sin esta feature la sync usa solo HTTP (GitHubReleases).
 p2p = ["dep:librqbit", "dep:tokio"]
 
-# Binario de la GUI, gateado tras el feature `gui` (sin el, no se intenta compilar).
-# La CLI (`src/main.rs`) se auto-descubre aparte como el binario `sts2-modsync`.
-[[bin]]
-name = "sts2-modsync-gui"
-path = "src/bin/gui.rs"
-required-features = ["gui"]
+# SINGLE-EXE: hay UN solo binario, `sts2-modsync` (src/main.rs, auto-descubierto). Con
+# `--features gui` ese binario incluye la GUI y la abre sin argumentos; sin la feature es
+# solo CLI (build liviano). Ya NO hay un binario `sts2-modsync-gui` aparte.

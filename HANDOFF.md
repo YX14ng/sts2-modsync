@@ -117,7 +117,7 @@ TLS, por eso se fijo 0.12 (tiene `rustls-tls`+`blocking`); egui 0.34.3 resulto r
 2. **apply()** ✅ HECHO (`sync.rs`): transaccion all-or-nothing — baja TODO a `.part` + verifica
    BLAKE3, recien entonces renombra (orden topologico); huerfanos a la papelera (`trash`); aborta si
    el juego corre. Tests con `ModSource` falso (`GoodSource`/`BadSource`, sin red).
-3. **GUI** ✅ HECHO (`src/gui.rs`, feature `gui`, bin `sts2-modsync-gui`): 3 pantallas
+3. **GUI** ✅ HECHO (`src/gui.rs`, feature `gui`; single-exe: la abre `main` sin args): 3 pantallas
    (detectar/elegir -> revisar+consentir -> progreso) immediate-mode, con worker en hilo +
    canal `mpsc` + `ctx.request_repaint()` ya cableado (el hashing del plan corre off-UI). La
    pantalla 3 llama a `apply()` (stub) — se vuelve real al terminar #1-#2. OJO: eframe 0.34
@@ -134,7 +134,7 @@ TLS, por eso se fijo 0.12 (tiene `rustls-tls`+`blocking`); egui 0.34.3 resulto r
 ## FASE 3 — opcional
 - Delta intra-archivo del `.pck` con `bita` (verificar el supuesto de Godot primero).
 - **Auto-update ✅ HECHO** (`src/update.rs`): chequea el ultimo release de `YX14ng/sts2-modsync`,
-  compara con `CARGO_PKG_VERSION`, baja el `.zip`, extrae `sts2-modsync-gui.exe`, `self-replace`
+  compara con `CARGO_PKG_VERSION`, baja el `.zip`, extrae `sts2-modsync.exe`, `self-replace`
   (reemplaza el exe en uso) y relanza. GUI = banner "Actualizar ahora"; CLI = `update`. El repo es
   PUBLICO; el CI (`.github/workflows/release.yml`) publica el zip al pushear un tag `vX.Y.Z` (eso es
   lo que come el auto-update). Seguridad: baja/ejecuta un binario del PROPIO release por HTTPS

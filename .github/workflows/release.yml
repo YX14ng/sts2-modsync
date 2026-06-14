@@ -33,12 +33,12 @@ jobs:
           cargo clippy --all-targets --features gui -- -D warnings
           cargo test --features p2p
 
-      - name: Build release (CLI + GUI)
-        run: cargo build --release --features gui --bin sts2-modsync-gui --bin sts2-modsync
+      - name: Build release (single-exe GUI + CLI)
+        run: cargo build --release --features gui --bin sts2-modsync
 
-      - name: Empaquetar el zip
+      - name: Empaquetar el zip (un solo .exe)
         run: |
-          Compress-Archive -Path target/release/sts2-modsync-gui.exe, target/release/sts2-modsync.exe -DestinationPath sts2-modsync-windows-x86_64.zip -Force
+          Compress-Archive -Path target/release/sts2-modsync.exe -DestinationPath sts2-modsync-windows-x86_64.zip -Force
 
       - name: Firmar el zip (si hay clave secreta en secrets; sino no firma)
         env:

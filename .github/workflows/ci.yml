@@ -38,8 +38,8 @@ jobs:
       - name: Build del core/CLI sin features (que el build liviano siga verde)
         run: cargo check
 
-      - name: Build release-shape (GUI + CLI con gui/p2p)
-        run: cargo build --features gui --bin sts2-modsync-gui --bin sts2-modsync
+      - name: Build release-shape (single-exe con gui/p2p)
+        run: cargo build --features gui --bin sts2-modsync
 
   # Auditoria de vulnerabilidades del arbol de deps (incluye la superficie librqbit/tokio del
   # P2P). Lee Cargo.lock (OS-independiente) -> corre en ubuntu, rapido. Por default FALLA solo

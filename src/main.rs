@@ -1,4 +1,11 @@
-//! sts2-modsync — CLI del mod manager (+ sync) de Slay the Spire 2.
+// Single-exe: con `--features gui`, ESTE binario es la app entera (GUI + CLI). El subsistema
+// "windows" evita la consola negra al abrir el GUI con doble-clic; en modo CLI nos enganchamos
+// a la consola del padre (`attach_parent_console`) para que se vea la salida. Sin la feature
+// `gui` (build liviano de CLI), queda como consola normal.
+#![cfg_attr(all(windows, feature = "gui"), windows_subsystem = "windows")]
+
+//! sts2-modsync — mod manager (+ sync) de Slay the Spire 2. **Single-exe**: con `--features gui`,
+//! sin argumentos abre el GUI (doble-clic); con subcomandos corre la CLI. Sin la feature, solo CLI.
 //!
 //! Subcomandos:
 //!   sts2-modsync [list]            lista los mods instalados (habilitados/deshabilitados)
@@ -7,7 +14,8 @@
 //!   sts2-modsync launch            lanza el juego
 //!   sts2-modsync sync    <set.json> dry-run del plan de sincronizacion de un set
 //!
-//! La GUI (mod manager con pestañas) es `cargo run --features gui --bin sts2-modsync-gui`.
+//! La GUI (mod manager con pestañas) se abre corriendo el exe sin argumentos, o en dev con
+//! `cargo run --features gui`.
 
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
@@ -19,6 +27,17 @@ use sts2_modsync::{
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Sin argumentos en el build con GUI (doble-clic): abrir la interfaz grafica.
+    #[cfg(feature = "gui")]
+    if args.is_empty() {
+        return sts2_modsync::gui::run().map_err(|e| anyhow::anyhow!("error en el GUI: {e}"));
+    }
+    // Modo CLI en el exe "windows" (sin consola propia): engancharse a la del padre para que
+    // la salida (println/eprintln) se vea cuando se corre desde una terminal.
+    #[cfg(all(windows, feature = "gui"))]
+    attach_parent_console();
+
     let cmd = args.first().map(String::as_str).unwrap_or("list");
 
     if matches!(cmd, "help" | "-h" | "--help") {
@@ -82,6 +101,21 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// En el exe con subsistema "windows" (sin consola propia) nos enganchamos a la consola del
+/// proceso PADRE (la terminal desde donde se invoco) para que la salida del modo CLI sea
+/// visible. Best-effort: si no hay consola padre (doble-clic), AttachConsole falla y no pasa nada.
+#[cfg(all(windows, feature = "gui"))]
+fn attach_parent_console() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(dw_process_id: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX; // (DWORD)-1
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
 }
 
 /// config cacheada (re-validada) -> deteccion automatica -> dialogo manual.
@@ -453,5 +487,7 @@ fn print_help() {
     println!(
         "  seed    <out_dir>     seedea por P2P (torrent) un set publicado (necesita --features p2p)"
     );
-    println!("\nGUI (mod manager con pestañas): cargo run --features gui --bin sts2-modsync-gui");
+    println!(
+        "\nGUI (mod manager con pestañas): corre el exe SIN argumentos (o `cargo run --features gui`)."
+    );
 }

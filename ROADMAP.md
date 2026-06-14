@@ -128,9 +128,10 @@ de downgrade en sync.
 
 En este orden, una vez completado todo lo anterior:
 
-1. **Un solo `.exe` para ejecutar.** Unificar en un unico binario portable (hoy se compilan dos:
-   `sts2-modsync-gui.exe` + `sts2-modsync.exe`). Objetivo: el usuario baja un solo archivo y lo
-   corre, sin CLI aparte ni dependencias externas (hoy `publish` depende del `gh` CLI — ver feature 3).
+1. **Un solo `.exe` para ejecutar.** ✅ **HECHO (1.1.0).** Hay UN binario `sts2-modsync.exe`: sin
+   argumentos abre la GUI (doble-clic), con subcomandos es la CLI. Subsistema `windows` (sin consola
+   negra al abrir el GUI) + `AttachConsole` para que el modo CLI muestre salida desde una terminal.
+   (Sigue dependiendo del `gh` CLI para `publish` — eso lo cubre el feature 3.)
 
 2. **Sacar la dependencia del `.minisig`.**
    > **OJO (decision de seguridad):** la firma minisign es el invariante P0 — es lo que hace seguro
