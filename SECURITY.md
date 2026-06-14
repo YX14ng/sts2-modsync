@@ -6,10 +6,15 @@ modelo de confianza y como reportar un problema.
 
 ## Modelo de confianza (que garantiza y que NO)
 
-- **Firma minisign (P0).** Cada set-manifest se firma con la clave PRIVADA del publicador; el
-  cliente lleva la clave PUBLICA empotrada (`signing::PUBLISHER_PUBKEY`) y **rechaza** todo
-  manifest cuya firma no valide. Cierra "un atacante sustituye el manifest/.dll en el hosting o
-  hace MITM". El binario de auto-update se firma y verifica igual ANTES de reemplazar el exe.
+- **Firma minisign — dos modelos.** Para los **set-manifests (sync)** la firma es **opcional**
+  (`verify_optional`): el ancla de confianza es que bajaste el manifest por HTTPS desde el repo del
+  publicador que un amigo te paso (autenticado por GitHub) y que cada asset se verifica por BLAKE3.
+  Si el set viene firmado con la clave del publicador (`signing::PUBLISHER_PUBKEY`) se verifica
+  (capa extra) y una firma INVALIDA se **rechaza** (tampering); si no, se acepta como "sin firma"
+  y la UI lo muestra. Para el **binario de auto-update** la firma es **OBLIGATORIA**
+  (`verify_with_embedded`, estricto), porque baja y EJECUTA un binario.
+  TRADE-OFF de un set sin firma: una cuenta de GitHub del publicador comprometida podria servir un
+  manifest malicioso (la firma protegia contra eso); por eso firmar sigue siendo recomendado.
 - **Hash BLAKE3 por archivo.** Cada `FileEntry` lleva su `blake3`; `sync::apply` verifica cada
   `.part` ANTES de instalarlo. Bajar de un peer P2P no confiable es seguro porque los bytes se
   verifican contra el hash del manifest firmado.

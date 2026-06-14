@@ -36,15 +36,17 @@ esta completo. Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue
   usas el mismo, el filtro `v*` del auto-update (`update::check_latest` lista `/releases` y elige el
   mayor tag `vX.Y.Z`) evita que un release de mods (tag tipo `2026.06.14`) dispare un update falso.
 
-**Firma minisign (real + ACTIVA, crate `minisign`):** `PUBLISHER_PUBKEY` ya tiene la clave publica
-del publicador → la verificacion es OBLIGATORIA (no es modo dev). La clave SECRETA vive fuera del
-repo: en `%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitHub Actions
-`MINISIGN_SECRET_KEY`. Se firman DOS cosas con esa misma clave:
-- **set-manifests (sync):** `publish` firma -> `set-manifest.json.minisig`; el cliente baja el
-  `.minisig` (sufijo del manifest) y `verify_with_embedded` lo valida.
-- **binario de auto-update:** el CI corre `sts2-modsync sign <zip>` (clave de `MINISIGN_SECRET_KEY`)
-  y sube `<zip>.minisig`; `update::apply` lo baja y verifica ANTES de reemplazar el exe (cierra el
-  vector "release malicioso"). CLI `sign <archivo>` firma cualquier archivo.
+**Firma minisign (crate `minisign`) — DOS modelos (desde 1.3.0, ver `signing.rs`):**
+`PUBLISHER_PUBKEY` tiene la clave publica del publicador. La clave SECRETA vive fuera del repo: en
+`%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitHub Actions `MINISIGN_SECRET_KEY`.
+- **set-manifests (sync): firma OPCIONAL** (`verify_optional`). El ancla de confianza es HTTPS + la
+  URL del publicador (su repo de GitHub) + el content-addressing por BLAKE3. Si el set trae
+  `set-manifest.json.minisig` se valida (capa extra) y una firma invalida se rechaza; si no, se
+  acepta como `Unsigned` (la UI lo muestra: verde "verificada" / naranja "sin firma"). Un
+  publicador NO necesita manejar una clave para compartir sets.
+- **binario de auto-update: firma OBLIGATORIA** (`verify_with_embedded`, estricto). El CI corre
+  `sts2-modsync sign <zip>` (`MINISIGN_SECRET_KEY`) y sube `<zip>.minisig`; `update::apply` lo baja
+  y verifica ANTES de reemplazar el exe (cierra el vector "release malicioso"). CLI `sign <archivo>`.
 
 `eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
 `self-replace`) es dep normal.

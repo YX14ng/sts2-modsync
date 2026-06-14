@@ -1,13 +1,15 @@
-//! Firma minisign del set-manifest. P0 de seguridad: el cliente lleva la clave PUBLICA del
-//! publicador empotrada (`PUBLISHER_PUBKEY`) y rechaza todo manifest cuya firma no valide.
-//! Esto cierra "un atacante sustituye el .dll/manifest en el hosting o hace MITM".
+//! Firma minisign. DOS modelos de confianza, segun lo que se firma:
+//!  - **set-manifests (sync):** la firma es OPCIONAL (`verify_optional`). El ancla de confianza
+//!    es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo te paso, y
+//!    cada asset se verifica por BLAKE3. Si el set TRAE firma se valida (capa extra) y una firma
+//!    INVALIDA se rechaza (tampering); si no trae, se acepta como `Unsigned`. Asi un publicador
+//!    no NECESITA manejar una clave minisign para compartir sets.
+//!  - **binario de auto-update:** la firma es OBLIGATORIA (`verify_with_embedded`, estricto)
+//!    porque baja y EJECUTA un binario; sin firma valida NO se actualiza.
 //!
-//! OJO: la firma garantiza AUTENTICIDAD e INTEGRIDAD (viene del publicador y no fue
-//! alterado), NO inocuidad del codigo del mod — el amigo igual confia en el publicador.
-//! La clave PRIVADA jamas toca al cliente: vive en `%APPDATA%/.../minisign.key` del modder.
-//!
-//! `PUBLISHER_PUBKEY` vacia = **modo dev** (firma NO verificada). Para produccion: correr
-//! `sts2-modsync keygen`, pegar la clave publica aca, y recompilar.
+//! La firma garantiza AUTENTICIDAD e INTEGRIDAD (viene del publicador y no fue alterado), NO
+//! inocuidad del codigo del mod. La clave PRIVADA jamas toca al cliente: vive en
+//! `%APPDATA%/.../minisign.key` del modder. `PUBLISHER_PUBKEY` vacia = modo dev.
 
 use anyhow::{Context, Result};
 use std::io::Cursor;
@@ -22,6 +24,8 @@ pub const PUBLISHER_PUBKEY: &str = "RWTJ1u2UXFr4U590zg+O8G1zSvC1f+Cdzfug9sNnL5s0
 pub enum SigStatus {
     /// Firma valida verificada con la clave empotrada del publicador.
     Verified,
+    /// El set NO trae firma: se confia en HTTPS + la URL del publicador (no es modo dev).
+    Unsigned,
     /// Modo dev: `PUBLISHER_PUBKEY` vacia -> la firma NO se verifico.
     DevUnverified,
 }
@@ -41,6 +45,29 @@ pub fn verify_with_embedded(manifest_bytes: &[u8], signature: Option<&str>) -> R
     let sig = signature.context("el set no trae firma y la verificacion es obligatoria")?;
     verify(PUBLISHER_PUBKEY, manifest_bytes, sig)?;
     Ok(SigStatus::Verified)
+}
+
+/// Verificacion OPCIONAL para SETS (sync). La firma minisign ya NO es obligatoria: el ancla de
+/// confianza es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo te
+/// paso, y cada asset se verifica por BLAKE3. Reglas:
+///  - el set TRAE firma valida -> `Verified` (capa extra de seguridad);
+///  - el set TRAE firma pero NO valida -> `Err` (señal de tampering, se rechaza);
+///  - el set NO trae firma -> `Unsigned` (se acepta, confiando en HTTPS + la URL);
+///  - `PUBLISHER_PUBKEY` vacia -> `DevUnverified`.
+///
+/// OJO: el auto-update SIGUE exigiendo firma (`verify_with_embedded`, estricto) porque baja y
+/// EJECUTA un binario; esto es solo para los set-manifests de sync.
+pub fn verify_optional(manifest_bytes: &[u8], signature: Option<&str>) -> Result<SigStatus> {
+    if PUBLISHER_PUBKEY.is_empty() {
+        return Ok(SigStatus::DevUnverified);
+    }
+    match signature {
+        Some(sig) => {
+            verify(PUBLISHER_PUBKEY, manifest_bytes, sig)?;
+            Ok(SigStatus::Verified)
+        }
+        None => Ok(SigStatus::Unsigned),
+    }
 }
 
 /// Verifica `signature` (contenido de un `.minisig`) sobre `data` con `pubkey_b64`.
@@ -119,5 +146,17 @@ mod tests {
         }
         assert!(verify_with_embedded(b"data", None).is_err());
         assert!(verify_with_embedded(b"data", Some("no soy una firma")).is_err());
+    }
+
+    #[test]
+    fn verify_optional_acepta_sin_firma_y_rechaza_firma_invalida() {
+        if !is_enforced() {
+            eprintln!("(skip: PUBLISHER_PUBKEY vacia, modo dev)");
+            return;
+        }
+        // sin firma -> Unsigned (se acepta; el ancla es HTTPS + la URL).
+        assert_eq!(verify_optional(b"data", None).unwrap(), SigStatus::Unsigned);
+        // firma PRESENTE pero invalida -> rechaza (tampering).
+        assert!(verify_optional(b"data", Some("no soy una firma")).is_err());
     }
 }

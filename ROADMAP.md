@@ -133,13 +133,13 @@ En este orden, una vez completado todo lo anterior:
    negra al abrir el GUI) + `AttachConsole` para que el modo CLI muestre salida desde una terminal.
    (Sigue dependiendo del `gh` CLI para `publish` — eso lo cubre el feature 3.)
 
-2. **Sacar la dependencia del `.minisig`.**
-   > **OJO (decision de seguridad):** la firma minisign es el invariante P0 — es lo que hace seguro
-   > bajar DLLs que el juego EJECUTA, sobre todo por P2P (peers no confiables). Sacarla a secas
-   > REMUEVE esa garantia. Solo tiene sentido si se reemplaza el ancla de confianza, p.ej. con el
-   > feature 3 (login GitHub): el manifest viene del repo AUTENTICADO del publicador via HTTPS, y el
-   > content-addressing por BLAKE3 garantiza integridad. Hay que decidir el modelo nuevo antes de
-   > implementar (que pasa con P2P, donde el peer no es GitHub). A discutir al llegar aca.
+2. **Sacar la dependencia del `.minisig`.** ✅ **HECHO (1.3.0).** Modelo elegido: la firma de un
+   set-manifest es **OPCIONAL** (`signing::verify_optional`). Ancla de confianza nuevo: el manifest
+   viene por HTTPS del repo AUTENTICADO del publicador (login del feature 3) + content-addressing
+   por BLAKE3 de los assets (cubre tambien el caso P2P: el peer no es de confianza, pero los bytes
+   se verifican contra el hash del manifest). Si el set TRAE firma se valida (capa extra) y una firma
+   invalida se rechaza; si no, `Unsigned` (la UI lo muestra). El **auto-update** (que EJECUTA un
+   binario) sigue exigiendo firma estricta. Trade-off documentado en SECURITY.md.
 
 3. **Login de GitHub en la app + crear repo publico de mods automatico.** ✅ **HECHO (1.2.0).**
    Modulo `github`: login con PAT pegado o OAuth device-flow (con `OAUTH_CLIENT_ID` configurable),

@@ -3,6 +3,21 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.3.0] - 2026-06-14 — Firma minisign opcional para sets (post-1.0 #3)
+
+- La **firma minisign de un set-manifest ya NO es obligatoria** (`signing::verify_optional`): el
+  ancla de confianza es que bajaste el manifest por **HTTPS desde el repo del publicador** que un
+  amigo te paso (autenticado por GitHub) y que cada asset se verifica por **BLAKE3**. Un publicador
+  ya no NECESITA manejar una clave minisign para compartir sets.
+- Si un set viene firmado, se verifica (capa extra) y una firma **invalida se rechaza** (tampering);
+  si no, se acepta como "sin firma". La UI lo muestra claro: verde "✓ Firma verificada" / naranja
+  "● Sin firma: confias en la URL/HTTPS"; la CLI (`sync`) imprime el estado.
+- El **auto-update sigue exigiendo firma** (`verify_with_embedded`, estricto) porque baja y EJECUTA
+  un binario — ese vector NO se relajo.
+
+> Trade-off: un set sin firma confia en que la cuenta de GitHub del publicador no este comprometida
+> (la firma protegia contra eso). Firmar sigue siendo recomendado; ahora es opcional.
+
 ## [1.2.0] - 2026-06-14 — Publicar sin el `gh` CLI (post-1.0 #2)
 
 - **Login de GitHub en la app** (modulo `github`): se puede conectar con un **Personal Access

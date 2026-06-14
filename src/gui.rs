@@ -1747,6 +1747,13 @@ impl App {
                 Some(crate::signing::SigStatus::Verified) => {
                     ui.colored_label(OK, "✓ Firma verificada — set autentico del publicador.");
                 }
+                Some(crate::signing::SigStatus::Unsigned) => {
+                    ui.colored_label(
+                        WARN,
+                        "● Sin firma: confias en que esta URL es del publicador (HTTPS). Los \
+                         archivos igual se verifican por hash.",
+                    );
+                }
                 Some(crate::signing::SigStatus::DevUnverified) => {
                     ui.colored_label(
                         WARN,
@@ -1972,7 +1979,8 @@ impl App {
         // de version en Done. Asi no se graba la version de un set-archivo contra una URL vieja.
         self.sync.loaded_url = source.starts_with("http").then(|| source.clone());
         self.sync.source = source;
-        match crate::signing::verify_with_embedded(text.as_bytes(), signature.as_deref()) {
+        // Firma OPCIONAL para sets: si trae firma se valida (firma mala -> Err), si no, Unsigned.
+        match crate::signing::verify_optional(text.as_bytes(), signature.as_deref()) {
             Ok(status) => self.sync.sig_status = Some(status),
             Err(e) => {
                 self.sync.load_err = Some(format!("firma invalida: {e:#}"));
