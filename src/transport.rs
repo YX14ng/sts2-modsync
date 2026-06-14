@@ -10,10 +10,21 @@ use std::path::Path;
 
 /// Una fuente desde la que bajar los archivos de un set.
 pub trait ModSource {
+    /// Pre-carga (opcional) TODO el conjunto `entries` de una, antes del loop de `fetch`.
+    /// Pensado para backends que bajan el set entero a la vez (p.ej. un torrent: se une al
+    /// swarm y baja los archivos seleccionados juntos). `on_bytes` recibe los bytes NUEVOS
+    /// a medida que llegan (para la barra). Default = no-op: las fuentes por-archivo (HTTP)
+    /// no necesitan esto y bajan en `fetch`. Si `prepare` deja un archivo cacheado, `fetch`
+    /// NO debe volver a contar esos bytes (los reporto aca).
+    fn prepare(&self, _entries: &[FileEntry], _on_bytes: &mut dyn FnMut(u64)) -> Result<()> {
+        Ok(())
+    }
+
     /// Descarga `entry.path` (resuelto contra `base_url`) hacia `dest`, llamando `on_bytes`
     /// con la cantidad de bytes NUEVOS de cada chunk (para la barra de progreso). NO
     /// verifica el hash: eso lo hace `sync::apply` tras bajar (separa transporte de
-    /// verificacion, y apply ya tiene `hashing`).
+    /// verificacion, y apply ya tiene `hashing`). Si `prepare` ya dejo el archivo listo, la
+    /// impl puede moverlo y reportar 0 bytes (ya contados en `prepare`).
     fn fetch(
         &self,
         base_url: &str,

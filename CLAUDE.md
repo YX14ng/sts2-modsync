@@ -51,9 +51,18 @@ repo: en `%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitH
   · `profile` (perfiles = conjuntos habilitados; puente con set-manifest) · `launch` (abrir el juego).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort) · `hashing` (blake3)
   · `sync` (`plan()` + `apply()` transaccional) · `signing` (minisign verify) · `transport` (GitHub
-  Releases, `reqwest` blocking, **content-addressed por blake3**) · `publish` (genera el
+  Releases, `reqwest` blocking, **content-addressed por blake3**; el trait `ModSource` tiene un
+  `prepare()` opcional que un backend usa para pre-bajar el set entero) · `publish` (genera el
   set-manifest + assets desde los mods y los SUBE al Release via `gh`, lado modder).
-- **Front:** `main` (CLI con subcomandos) · `gui` (eframe, pestañas; feature `gui`). `lib.rs` reexporta.
+- **P2P (añadido, feature `p2p`):** `torrent` (librqbit + tokio, gateado): `create_set_torrent`
+  arma el `.torrent` del dir de assets y el magnet (lo mete `publish` en el manifest ANTES de
+  firmar) · `seed_blocking` seedea el dir de assets (archivos ya presentes) · `HybridSource`
+  implementa `ModSource`: `prepare` se une al swarm y baja los archivos pedidos a un staging,
+  `fetch` los copia a destino, y si **no hay seeder** cae a `GitHubReleases` (HTTP). El magnet va
+  en el manifest FIRMADO; `apply` igual verifica BLAKE3, asi que bajar de un peer es seguro. Envs
+  avanzados (LAN/tests): `STS2_P2P_PEERS=ip:port,...`, `STS2_P2P_SEED_PORT`, `STS2_P2P_NODHT`.
+- **Front:** `main` (CLI con subcomandos) · `gui` (eframe, pestañas; feature `gui` que INCLUYE
+  `p2p`). `lib.rs` reexporta.
 
 Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod trae para el juego
 (modelo en `modlist::ModManifest`) y el **set-manifest** de la sync (`manifest::SetManifest` /
@@ -66,16 +75,22 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>] [--no-upload]`
     (modder; por default SUBE al Release via `gh`, `--no-upload` solo genera local)
   · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
-  · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma).
+  · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma)
+  · `seed <out_dir>` (P2P: seedea un set publicado por torrent; bloquea hasta Ctrl-C; necesita
+    `--features p2p`. En el GUI: boton "Seedear este set (P2P)" en la pestaña Publicar).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.
+- P2P (torrent): `cargo build --features p2p` (CLI con `seed`) o `--features gui` (ya incluye p2p).
+  Test e2e real de P2P (loopback, abre sockets, ignorado por default):
+  `cargo test --features p2p p2p_loopback -- --ignored --nocapture --test-threads=1`.
 - Un solo test: `cargo test <nombre>` (o por modulo `cargo test modlist::tests::`); `-- --nocapture`
   para ver prints. Tests inline en `manifest`/`modlist`/`profile`/`sync`/`publish` (varios crean
   mods de prueba en un tempdir; `sync::apply` usa un `ModSource` falso, `publish` hace round-trip
   prepare→plan=noop). NO pegan a la red.
 - Agregar deps: `cargo add <crate>` (NO hardcodear patch a ojo — deja que cargo resuelva).
-- Toolchain **MSVC** + VS Build Tools (sin OpenSSL; todo rustls). El core ya incluye `zip`/`trash`
-  (manager); `eframe` es opcional (feature `gui`). Release size-optimized (`opt-level="z"`, `lto`,
-  `panic="abort"`).
+- Toolchain **MSVC** + VS Build Tools (sin OpenSSL; todo rustls — librqbit usa native-tls=SChannel
+  en Windows, NO OpenSSL). El core ya incluye `zip`/`trash` (manager); `eframe` es opcional (feature
+  `gui`); `librqbit`+`tokio` son opcionales (feature `p2p`, que `gui` incluye) y engordan el binario
+  (por eso van gateados). Release size-optimized (`opt-level="z"`, `lto`, `panic="abort"`).
 
 ## Invariantes que NO romper
 

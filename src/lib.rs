@@ -16,6 +16,10 @@ pub mod profile;
 pub mod publish;
 pub mod signing;
 pub mod sync;
+/// Backend P2P estilo torrent (librqbit) + fallback HTTP. Opcional: solo con `--features p2p`
+/// (lo incluye `gui`). Sin la feature, la sync usa solo HTTP (`transport::GitHubReleases`).
+#[cfg(feature = "p2p")]
+pub mod torrent;
 pub mod transport;
 pub mod update;
 

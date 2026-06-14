@@ -107,6 +107,15 @@ pub fn apply(
     // 1+2) Bajar TODO a `.part` + verificar blake3. Nada se renombra hasta que todo paso.
     let rank = order_rank(&plan.install_order);
     let mut done: u64 = 0;
+
+    // Pre-carga opcional del set entero (torrent: se une al swarm y baja todo junto). Las
+    // fuentes por-archivo (HTTP) lo ignoran (default no-op). Los bytes que reporte aca NO se
+    // recuentan en el loop de fetch.
+    source.prepare(&plan.to_download, &mut |n| {
+        done += n;
+        on_progress(done);
+    })?;
+
     let mut staged: Vec<(PathBuf, PathBuf, usize)> = Vec::new(); // (part, dest, rank topologico)
     for entry in &plan.to_download {
         let dest = mods_dir.join(rel_to_native(&entry.path));
@@ -192,6 +201,7 @@ mod tests {
             published_at: "now".into(),
             signing_key_id: None,
             base_url: "https://example/".into(),
+            magnet: None,
             baselib_version: None,
             mods: vec![ModEntry {
                 id: mod_id.into(),

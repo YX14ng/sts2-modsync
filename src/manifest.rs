@@ -49,6 +49,12 @@ pub struct SetManifest {
     /// Base desde donde se descargan los archivos (p.ej. la URL de un GitHub Release).
     /// Cada `FileEntry.path` se resuelve relativo a esta base.
     pub base_url: String,
+    /// Magnet del torrent del set (P2P). Opcional => backward-compatible (sets viejos =
+    /// solo HTTP). Como el manifest va FIRMADO, el magnet queda autenticado: un peer no
+    /// puede sustituir el torrent, y los bytes igual se verifican por BLAKE3 al bajar.
+    /// El cliente prueba P2P y, si no hay seeder, cae a `base_url` (HTTP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnet: Option<String>,
     /// Version de BaseLib con la que se compilaron estos mods (pin); el cliente
     /// avisa si el install tiene otra (ReflectionTypeLoadException si difieren).
     #[serde(default)]
@@ -253,6 +259,7 @@ mod tests {
             published_at: "now".into(),
             signing_key_id: None,
             base_url: "https://x/".into(),
+            magnet: None,
             baselib_version: None,
             mods,
         }

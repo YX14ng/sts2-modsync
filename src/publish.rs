@@ -119,6 +119,7 @@ pub fn prepare(
         published_at,
         signing_key_id: None,
         base_url: p.base_url.clone(),
+        magnet: None,
         baselib_version: p.baselib_version.clone(),
         mods: entries,
     };
@@ -155,8 +156,24 @@ pub fn write_out(prep: &Prepared, out_dir: &Path) -> Result<PathBuf> {
                 .with_context(|| format!("copiando asset {}", a.src.display()))?;
         }
     }
+
+    // Con feature p2p: armar el torrent del dir de assets y meter el magnet en el manifest
+    // ANTES de serializar/firmar (asi la firma cubre el magnet). Tambien deja `set.torrent`
+    // local para seedear. Sin la feature, el manifest sale sin magnet (solo HTTP).
+    #[cfg_attr(not(feature = "p2p"), allow(unused_mut))]
+    let mut manifest = prep.manifest.clone();
+    #[cfg(feature = "p2p")]
+    {
+        let (magnet, torrent_bytes) =
+            crate::torrent::create_set_torrent(&assets_dir, &manifest.set_name)
+                .context("creando el torrent del set")?;
+        std::fs::write(out_dir.join("set.torrent"), &torrent_bytes)
+            .with_context(|| format!("escribiendo {}", out_dir.join("set.torrent").display()))?;
+        manifest.magnet = Some(magnet);
+    }
+
     let manifest_path = out_dir.join("set-manifest.json");
-    let json = serde_json::to_string_pretty(&prep.manifest)?;
+    let json = serde_json::to_string_pretty(&manifest)?;
     std::fs::write(&manifest_path, &json)
         .with_context(|| format!("escribiendo {}", manifest_path.display()))?;
     // Firmar si el modder tiene clave secreta (`keygen`). Sin clave => sin firma (modo dev).
@@ -220,6 +237,10 @@ pub fn upload(out_dir: &Path, base_url: &str) -> Result<String> {
     let sig = out_dir.join("set-manifest.json.minisig");
     if sig.exists() {
         files.push(sig);
+    }
+    let torrent = out_dir.join("set.torrent");
+    if torrent.exists() {
+        files.push(torrent);
     }
     if let Ok(rd) = std::fs::read_dir(out_dir.join("assets")) {
         for e in rd.flatten() {

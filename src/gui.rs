@@ -15,8 +15,9 @@ use crate::{config, launch, manager, publish, sync, transport, update};
 use eframe::egui;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 
 const WARN: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x00);
 const OK: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
@@ -178,6 +179,9 @@ struct App {
     pub_base_url: String,
     pub_profile: Option<String>, // None = mods habilitados actuales
     pub_out_dir: Option<PathBuf>,
+    // Seeding P2P del set publicado: Some(flag) mientras seedea (set flag=true para cortar).
+    seed_stop: Option<Arc<AtomicBool>>,
+    seed_status: Arc<Mutex<String>>,
 
     // Auto-update
     update_checked: bool,
@@ -213,6 +217,8 @@ impl App {
             pub_base_url: String::new(),
             pub_profile: None,
             pub_out_dir: None,
+            seed_stop: None,
+            seed_status: Arc::new(Mutex::new(String::new())),
             update_checked: false,
             update_check_job: None,
             update_avail: None,
@@ -1061,6 +1067,88 @@ impl App {
         {
             let _ = manager::open_folder(&dir);
         }
+
+        // Seeding P2P: comparti el set por torrent mientras la app este abierta. Tus amigos
+        // bajan de vos (mas el fallback HTTP del release). Necesita un set ya publicado
+        // (set.torrent + assets/ en la carpeta de salida).
+        self.ui_seed_control(ui, ctx);
+    }
+
+    fn ui_seed_control(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(8.0);
+        ui.separator();
+        if let Some(stop) = &self.seed_stop {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                let st = self
+                    .seed_status
+                    .lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_default();
+                ui.label(if st.is_empty() {
+                    "seedeando...".into()
+                } else {
+                    st
+                });
+            });
+            if ui.button("Detener seed").clicked() {
+                stop.store(true, Ordering::Relaxed);
+                self.seed_stop = None;
+            }
+            return;
+        }
+
+        let Some(dir) = self.pub_out_dir.clone() else {
+            ui.label(egui::RichText::new("Publica un set para poder seedearlo por P2P.").weak());
+            return;
+        };
+        let ready = dir.join("set.torrent").is_file() && dir.join("assets").is_dir();
+        if ui
+            .add_enabled(ready, egui::Button::new("Seedear este set (P2P)"))
+            .clicked()
+        {
+            self.start_seed(ctx, dir);
+        }
+        if !ready {
+            ui.label(egui::RichText::new("(falta set.torrent/assets: publica primero)").weak());
+        }
+    }
+
+    fn start_seed(&mut self, ctx: &egui::Context, out_dir: PathBuf) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+        let status = self.seed_status.clone();
+        let ctx = ctx.clone();
+        *status.lock().unwrap() = "iniciando seed...".into();
+        std::thread::spawn(move || {
+            let assets = out_dir.join("assets");
+            let res = (|| -> anyhow::Result<()> {
+                let bytes = std::fs::read(out_dir.join("set.torrent"))?;
+                crate::torrent::seed_blocking(
+                    &assets,
+                    &bytes,
+                    &mut |st| {
+                        if let Ok(mut s) = status.lock() {
+                            *s = format!(
+                                "seedeando ({}) · subido {:.1} MB",
+                                st.state,
+                                st.uploaded_bytes as f64 / 1_048_576.0
+                            );
+                        }
+                        ctx.request_repaint();
+                    },
+                    &|| stop_thread.load(Ordering::Relaxed),
+                )
+            })();
+            if let Ok(mut s) = status.lock() {
+                *s = match res {
+                    Ok(()) => "seed detenido.".into(),
+                    Err(e) => format!("seed cortado: {e:#}"),
+                };
+            }
+            ctx.request_repaint();
+        });
+        self.seed_stop = Some(stop);
     }
 
     fn start_publish(&mut self, ctx: &egui::Context, ids: BTreeSet<String>) {
@@ -1434,11 +1522,35 @@ impl App {
                 let total = plan.bytes_to_download;
                 let _ = tx.send(SyncProgress::Bytes { done: 0, total });
                 ctx.request_repaint();
-                let source = transport::GitHubReleases::new();
-                sync::apply(&plan, &manifest, &install.mods_dir, &source, &mut |done| {
-                    let _ = tx.send(SyncProgress::Bytes { done, total });
-                    ctx.request_repaint();
-                })?;
+                // Con feature p2p y magnet en el manifest: bajar via torrent (fallback HTTP).
+                // Sin eso: solo HTTP, como siempre.
+                let source: Box<dyn transport::ModSource> = {
+                    #[cfg(feature = "p2p")]
+                    {
+                        let hy = crate::torrent::HybridSource::new(&manifest);
+                        if hy.has_p2p() {
+                            let _ = tx.send(SyncProgress::Status(
+                                "Bajando via P2P (torrent), fallback HTTP...".into(),
+                            ));
+                            ctx.request_repaint();
+                        }
+                        Box::new(hy)
+                    }
+                    #[cfg(not(feature = "p2p"))]
+                    {
+                        Box::new(transport::GitHubReleases::new())
+                    }
+                };
+                sync::apply(
+                    &plan,
+                    &manifest,
+                    &install.mods_dir,
+                    source.as_ref(),
+                    &mut |done| {
+                        let _ = tx.send(SyncProgress::Bytes { done, total });
+                        ctx.request_repaint();
+                    },
+                )?;
                 Ok(())
             })();
             let _ = match result {

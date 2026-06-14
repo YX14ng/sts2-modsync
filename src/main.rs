@@ -34,6 +34,9 @@ fn main() -> Result<()> {
     if cmd == "sign" {
         return cmd_sign(&args);
     }
+    if cmd == "seed" {
+        return cmd_seed(&args);
+    }
 
     let cfg = config::load();
     let Some(install) = resolve_install(&cfg) else {
@@ -68,7 +71,9 @@ fn main() -> Result<()> {
             cmd_sync(&install, other)?
         }
         other => {
-            bail!("subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|help)")
+            bail!(
+                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|seed|help)"
+            )
         }
     }
     Ok(())
@@ -180,6 +185,47 @@ fn cmd_sign(args: &[String]) -> Result<()> {
     std::fs::write(&sig_path, sig).with_context(|| format!("escribiendo {sig_path}"))?;
     println!("firmado: {sig_path}");
     Ok(())
+}
+
+/// `seed <out_dir>`: seedea por P2P (torrent) el set publicado en `out_dir` (necesita
+/// `set.torrent` + `assets/`, generados por `publish`). Bloquea hasta Ctrl-C: tus amigos
+/// bajan de vos mientras corra. Requiere compilar con `--features p2p`.
+#[cfg(feature = "p2p")]
+fn cmd_seed(args: &[String]) -> Result<()> {
+    let out_dir = Path::new(arg(args, 1)?);
+    let torrent_path = out_dir.join("set.torrent");
+    let assets_dir = out_dir.join("assets");
+    let torrent_bytes = std::fs::read(&torrent_path).with_context(|| {
+        format!(
+            "no se pudo leer {} (¿corriste `publish` con --features p2p?)",
+            torrent_path.display()
+        )
+    })?;
+    if !assets_dir.is_dir() {
+        bail!("no existe {} (assets del set)", assets_dir.display());
+    }
+    println!(
+        "Seedeando {} ... (Ctrl-C para cortar)",
+        assets_dir.display()
+    );
+    sts2_modsync::torrent::seed_blocking(
+        &assets_dir,
+        &torrent_bytes,
+        &mut |st| {
+            println!(
+                "  estado: {:<14} subido: {:.1} MB{}",
+                st.state,
+                st.uploaded_bytes as f64 / 1_048_576.0,
+                if st.complete { " (completo)" } else { "" }
+            );
+        },
+        &|| false, // corre hasta Ctrl-C
+    )
+}
+
+#[cfg(not(feature = "p2p"))]
+fn cmd_seed(_args: &[String]) -> Result<()> {
+    bail!("`seed` necesita P2P: recompila con `cargo build --features p2p` (o usa el GUI).")
 }
 
 fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
@@ -388,6 +434,9 @@ fn print_help() {
     println!("  keygen                genera el par de claves minisign del modder (firma sets)");
     println!(
         "  sign    <archivo>     firma un archivo (.minisig); clave de MINISIGN_SECRET_KEY o keygen"
+    );
+    println!(
+        "  seed    <out_dir>     seedea por P2P (torrent) un set publicado (necesita --features p2p)"
     );
     println!("\nGUI (mod manager con pestañas): cargo run --features gui --bin sts2-modsync-gui");
 }
