@@ -31,6 +31,9 @@ fn main() -> Result<()> {
     if cmd == "keygen" {
         return cmd_keygen();
     }
+    if cmd == "sign" {
+        return cmd_sign(&args);
+    }
 
     let cfg = config::load();
     let Some(install) = resolve_install(&cfg) else {
@@ -155,6 +158,27 @@ fn cmd_keygen() -> Result<()> {
     println!("(NO la compartas ni la subas al repo — con ella `publish` firma tus sets.)\n");
     println!("Pega esta clave PUBLICA en src/signing.rs (PUBLISHER_PUBKEY) y recompila:\n");
     println!("  {pk}\n");
+    Ok(())
+}
+
+/// `sign <archivo>`: firma un archivo (escribe `<archivo>.minisig`). La clave secreta sale
+/// de la env `MINISIGN_SECRET_KEY` (la usa el CI) o de la guardada por `keygen`. Sin clave,
+/// no hace nada (sale OK) — asi el paso de firma del CI es opcional.
+fn cmd_sign(args: &[String]) -> Result<()> {
+    let file = arg(args, 1)?;
+    let sk = std::env::var("MINISIGN_SECRET_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(signing::load_secret_key);
+    let Some(sk) = sk else {
+        println!("sin clave secreta (env MINISIGN_SECRET_KEY ni keygen) — no se firma.");
+        return Ok(());
+    };
+    let data = std::fs::read(file).with_context(|| format!("leyendo {file}"))?;
+    let sig = signing::sign(&sk, &data)?;
+    let sig_path = format!("{file}.minisig");
+    std::fs::write(&sig_path, sig).with_context(|| format!("escribiendo {sig_path}"))?;
+    println!("firmado: {sig_path}");
     Ok(())
 }
 
@@ -347,5 +371,8 @@ fn print_help() {
     println!("                        genera un set-manifest + assets desde tus mods (modder)");
     println!("  update                chequea GitHub y actualiza la app si hay version nueva");
     println!("  keygen                genera el par de claves minisign del modder (firma sets)");
+    println!(
+        "  sign    <archivo>     firma un archivo (.minisig); clave de MINISIGN_SECRET_KEY o keygen"
+    );
     println!("\nGUI (mod manager con pestañas): cargo run --features gui --bin sts2-modsync-gui");
 }

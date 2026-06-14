@@ -31,7 +31,15 @@ jobs:
         run: |
           Compress-Archive -Path target/release/sts2-modsync-gui.exe, target/release/sts2-modsync.exe -DestinationPath sts2-modsync-windows-x86_64.zip -Force
 
-      - name: Crear el GitHub Release
+      - name: Firmar el zip (si hay clave secreta en secrets; sino no firma)
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: target/release/sts2-modsync.exe sign sts2-modsync-windows-x86_64.zip
+
+      - name: Crear el GitHub Release (zip + .minisig si se firmo)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create ${{ github.ref_name }} sts2-modsync-windows-x86_64.zip --title ${{ github.ref_name }} --generate-notes
+        run: |
+          $files = @("sts2-modsync-windows-x86_64.zip")
+          if (Test-Path "sts2-modsync-windows-x86_64.zip.minisig") { $files += "sts2-modsync-windows-x86_64.zip.minisig" }
+          gh release create ${{ github.ref_name }} $files --title ${{ github.ref_name }} --generate-notes

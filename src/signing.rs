@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 /// Clave PUBLICA minisign del publicador (base64 cruda). Generar con `sts2-modsync keygen`
 /// y pegar aca. Vacia = modo dev (sin verificar firma).
-pub const PUBLISHER_PUBKEY: &str = "";
+pub const PUBLISHER_PUBKEY: &str = "RWTJ1u2UXFr4U590zg+O8G1zSvC1f+Cdzfug9sNnL5s0CgOSOz0QSdLX";
 
 /// Verifica con la clave empotrada. Vacia => modo dev (no falla). Con clave seteada => exige
 /// que el set traiga firma valida.

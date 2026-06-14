@@ -25,11 +25,16 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
   transporte baja por `base_url + blake3`, NO por `entry.path` (que queda solo para instalar local).
   **FASE 3:** delta intra-`.pck` (bita), auto-update, HTTP Range/resume. Detalle en HANDOFF.md.
 
-**Firma minisign (real, crate `minisign`):** `keygen` genera el par (secreto en
-`%APPDATA%/.../minisign.key`, fuera del repo); `publish` firma el set-manifest si hay clave secreta
-(escribe `set-manifest.json.minisig`); el cliente baja el `.minisig` (junto al manifest, sufijo
-`.minisig`) y `signing::verify_with_embedded` lo valida con la pub empotrada. `PUBLISHER_PUBKEY`
-vacia = **modo dev** (firma NO verificada — pegar la pub de `keygen` para activarla en release).
+**Firma minisign (real + ACTIVA, crate `minisign`):** `PUBLISHER_PUBKEY` ya tiene la clave publica
+del publicador → la verificacion es OBLIGATORIA (no es modo dev). La clave SECRETA vive fuera del
+repo: en `%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitHub Actions
+`MINISIGN_SECRET_KEY`. Se firman DOS cosas con esa misma clave:
+- **set-manifests (sync):** `publish` firma -> `set-manifest.json.minisig`; el cliente baja el
+  `.minisig` (sufijo del manifest) y `verify_with_embedded` lo valida.
+- **binario de auto-update:** el CI corre `sts2-modsync sign <zip>` (clave de `MINISIGN_SECRET_KEY`)
+  y sube `<zip>.minisig`; `update::apply` lo baja y verifica ANTES de reemplazar el exe (cierra el
+  vector "release malicioso"). CLI `sign <archivo>` firma cualquier archivo.
+
 `eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
 `self-replace`) es dep normal.
 

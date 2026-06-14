@@ -130,6 +130,18 @@ pub fn apply(rel: &Release) -> Result<()> {
         .bytes()
         .context("leyendo el zip")?;
 
+    // Verificar la firma minisign del zip (si `PUBLISHER_PUBKEY` esta seteada). Cierra el
+    // vector "release/cuenta de GitHub comprometida sirve un binario malicioso". Con la clave
+    // vacia (modo dev) NO verifica, igual que la sync.
+    let sig = client()?
+        .get(format!("{}.minisig", rel.zip_url))
+        .send()
+        .ok()
+        .and_then(|r| r.error_for_status().ok())
+        .and_then(|r| r.text().ok());
+    crate::signing::verify_with_embedded(&bytes, sig.as_deref())
+        .context("la firma del binario de update NO valida — se aborta la actualizacion")?;
+
     let cur = std::env::current_exe().context("current_exe")?;
     let tmp_exe = cur.with_extension("new");
     extract_named(&bytes, ASSET_EXE, &tmp_exe)?;
