@@ -72,6 +72,9 @@ impl ModSource for GitHubReleases {
     ) -> Result<()> {
         // Content-addressed: el asset remoto se llama por su BLAKE3 (no por la ruta local).
         let url = join_url(base_url, &entry.blake3);
+        // HTTPS obligatorio tambien para los assets (.dll/.pck que el juego ejecuta), no solo
+        // el manifest. El base_url ya se valida al parsear, pero esto cubre cada GET.
+        require_https(&url)?;
 
         // ¿Reanudar? Si el `.part` quedo a medias de un intento previo, pedimos solo el resto
         // con HTTP Range (los `.pck` de 100+ MB no se rehacen desde cero).
@@ -131,10 +134,7 @@ impl ModSource for GitHubReleases {
 /// GET de una URL y devuelve el body como texto. Para bajar el `set-manifest.json` desde
 /// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
 pub fn get_text(url: &str) -> Result<String> {
-    // HTTPS obligatorio (defensa en profundidad): el manifest/.minisig no se bajan en claro.
-    if url.trim_start().to_ascii_lowercase().starts_with("http://") {
-        bail!("URL insegura (http://): la sync exige HTTPS — {url}");
-    }
+    require_https(url)?; // el manifest/.minisig no se bajan en claro
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
         .build()
@@ -147,6 +147,16 @@ pub fn get_text(url: &str) -> Result<String> {
         .with_context(|| format!("bajando {url}"))?
         .text()?;
     Ok(body)
+}
+
+/// Rechaza URLs `http://` (defensa en profundidad): manifest, firma Y assets (.dll/.pck que el
+/// juego ejecuta) se bajan SIEMPRE por HTTPS. Una base local/relativa para tests no es `http://`
+/// y pasa.
+pub fn require_https(url: &str) -> Result<()> {
+    if url.trim_start().to_ascii_lowercase().starts_with("http://") {
+        bail!("URL insegura (http://): se exige HTTPS — {url}");
+    }
+    Ok(())
 }
 
 /// Une `base` + `path` relativo con una sola `/`.
@@ -174,5 +184,13 @@ mod tests {
     fn get_text_rechaza_http_inseguro() {
         // Falla ANTES de tocar la red (la verificacion de http:// es lo primero).
         assert!(get_text("http://example/set-manifest.json").is_err());
+    }
+
+    #[test]
+    fn require_https_rechaza_http_y_acepta_https_o_relativa() {
+        assert!(require_https("http://example/x").is_err());
+        assert!(require_https("  HTTP://EXAMPLE/x").is_err()); // case/espacios
+        assert!(require_https("https://example/x").is_ok());
+        assert!(require_https("set-manifest.json").is_ok()); // base local/relativa (tests)
     }
 }

@@ -239,7 +239,7 @@ fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
         let s = std::fs::read_to_string(format!("{src}.minisig")).ok();
         (t, s)
     };
-    signing::verify_with_embedded(text.as_bytes(), sig.as_deref())?;
+    let sig_status = signing::verify_with_embedded(text.as_bytes(), sig.as_deref())?;
     let manifest = SetManifest::from_json_str(&text)?;
     println!(
         "\nSet: {} v{}  ({} mods)",
@@ -247,6 +247,12 @@ fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
         manifest.set_version,
         manifest.mods.len()
     );
+    match sig_status {
+        signing::SigStatus::Verified => {
+            println!("  firma: VERIFICADA OK (publicador de confianza)")
+        }
+        signing::SigStatus::DevUnverified => println!("  firma: NO verificada (modo dev)"),
+    }
     if let Some(bl) = &manifest.baselib_version {
         println!("  BaseLib esperada: {bl}");
     }

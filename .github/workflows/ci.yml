@@ -40,3 +40,17 @@ jobs:
 
       - name: Build release-shape (GUI + CLI con gui/p2p)
         run: cargo build --features gui --bin sts2-modsync-gui --bin sts2-modsync
+
+  # Auditoria de vulnerabilidades del arbol de deps (incluye la superficie librqbit/tokio del
+  # P2P). Lee Cargo.lock (OS-independiente) -> corre en ubuntu, rapido. Por default FALLA solo
+  # ante CVEs reales; los avisos "unmaintained" quedan informativos (no rompen el build).
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit (RustSec)
+        run: cargo audit

@@ -17,15 +17,30 @@ use std::path::PathBuf;
 /// y pegar aca. Vacia = modo dev (sin verificar firma).
 pub const PUBLISHER_PUBKEY: &str = "RWTJ1u2UXFr4U590zg+O8G1zSvC1f+Cdzfug9sNnL5s0CgOSOz0QSdLX";
 
-/// Verifica con la clave empotrada. Vacia => modo dev (no falla). Con clave seteada => exige
-/// que el set traiga firma valida.
-pub fn verify_with_embedded(manifest_bytes: &[u8], signature: Option<&str>) -> Result<()> {
+/// Resultado de la verificacion (para mostrarlo de forma AFIRMATIVA en la UI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigStatus {
+    /// Firma valida verificada con la clave empotrada del publicador.
+    Verified,
+    /// Modo dev: `PUBLISHER_PUBKEY` vacia -> la firma NO se verifico.
+    DevUnverified,
+}
+
+/// True si la verificacion de firma esta ACTIVA (hay una pubkey empotrada). False = modo dev.
+pub fn is_enforced() -> bool {
+    !PUBLISHER_PUBKEY.is_empty()
+}
+
+/// Verifica con la clave empotrada. Vacia => modo dev (`DevUnverified`, no falla). Con clave
+/// seteada => exige firma valida y devuelve `Verified` (o `Err` si falta/no valida).
+pub fn verify_with_embedded(manifest_bytes: &[u8], signature: Option<&str>) -> Result<SigStatus> {
     if PUBLISHER_PUBKEY.is_empty() {
         eprintln!("[seguridad] PUBLISHER_PUBKEY vacia: firma NO verificada (modo dev).");
-        return Ok(());
+        return Ok(SigStatus::DevUnverified);
     }
     let sig = signature.context("el set no trae firma y la verificacion es obligatoria")?;
-    verify(PUBLISHER_PUBKEY, manifest_bytes, sig)
+    verify(PUBLISHER_PUBKEY, manifest_bytes, sig)?;
+    Ok(SigStatus::Verified)
 }
 
 /// Verifica `signature` (contenido de un `.minisig`) sobre `data` con `pubkey_b64`.
@@ -92,5 +107,17 @@ mod tests {
         assert!(verify(&pk, data, &sig).is_ok());
         // data distinta NO valida.
         assert!(verify(&pk, b"otra cosa", &sig).is_err());
+    }
+
+    #[test]
+    fn verify_with_embedded_exige_firma_cuando_hay_pubkey() {
+        // Con la verificacion ACTIVA (pubkey empotrada): un set SIN firma o con firma basura
+        // debe rechazarse (no se baja un .dll sin autenticar). En modo dev no aplica.
+        if !is_enforced() {
+            eprintln!("(skip: PUBLISHER_PUBKEY vacia, modo dev)");
+            return;
+        }
+        assert!(verify_with_embedded(b"data", None).is_err());
+        assert!(verify_with_embedded(b"data", Some("no soy una firma")).is_err());
     }
 }

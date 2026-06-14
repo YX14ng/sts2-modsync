@@ -149,6 +149,9 @@ pub fn apply(rel: &Release) -> Result<()> {
     if rel.zip_url.is_empty() {
         bail!("el release {} no trae un asset .zip", rel.tag);
     }
+    // HTTPS obligatorio: se baja y EJECUTA un binario. La firma minisign es el ancla fuerte,
+    // pero rechazar http:// es defensa en profundidad (no servir el exe en claro).
+    crate::transport::require_https(&rel.zip_url)?;
     let bytes = client()?
         .get(&rel.zip_url)
         .send()
@@ -160,8 +163,10 @@ pub fn apply(rel: &Release) -> Result<()> {
     // Verificar la firma minisign del zip (si `PUBLISHER_PUBKEY` esta seteada). Cierra el
     // vector "release/cuenta de GitHub comprometida sirve un binario malicioso". Con la clave
     // vacia (modo dev) NO verifica, igual que la sync.
+    let sig_url = format!("{}.minisig", rel.zip_url);
+    crate::transport::require_https(&sig_url)?; // tambien la firma por HTTPS (defensa en profundidad)
     let sig = client()?
-        .get(format!("{}.minisig", rel.zip_url))
+        .get(&sig_url)
         .send()
         .ok()
         .and_then(|r| r.error_for_status().ok())

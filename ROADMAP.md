@@ -64,12 +64,15 @@ y `is_game_running` fragil.
 - [x] Resume Range que re-baja de cero si el `.part` quedo corrupto (truncado en el reintento).
 - Validacion del `id` del manifest (cierra el escape de `mods_dir.join(id)` en orphan-scan/sweep).
 
-### 0.5 — Seguridad de la cadena · effort medio
-- HTTPS enforced (rechazar `http://`). **(importante, bajo)**
-- Cerrar zip-slip del install local desde `.zip` (`manager.rs`, no pasa por `validate_paths`).
-- `cargo-audit`/`cargo-deny` en CI (superficie de librqbit/tokio).
-- Verificacion de firma VISIBLE y afirmativa en la UI ("firmado por X, verificado OK").
-- `SECURITY.md` + tests negativos de seguridad.
+### 0.5 — Seguridad de la cadena · effort medio · **HECHA (0.2.5)**
+- [x] HTTPS enforced (`transport::require_https` rechaza `http://` en manifest, firma, assets y
+  el zip+`.minisig` del auto-update). **(importante, bajo)**
+- [x] Zip-slip del install local desde `.zip` cerrado (en 0.2.4: `enclosed_name` + componentes).
+- [x] `cargo-audit` en CI (job en ubuntu; falla solo ante CVEs, no ante "unmaintained").
+- [x] Verificacion de firma VISIBLE y afirmativa: `signing::SigStatus` -> verde "Firma verificada"
+  / naranja "modo dev" en el GUI, y linea en la CLI (`sync`).
+- [x] `SECURITY.md` (modelo de confianza + reporte) + tests negativos (`require_https`,
+  `verify_with_embedded` exige firma cuando hay pubkey).
 
 ### 0.6 — Distribuible y diagnosticable · effort bajo-medio
 - LICENSE (MIT/Apache-2.0) + campo `license`. **(BLOQUEANTE legal, bajo)**

@@ -435,6 +435,8 @@ struct SyncState {
     source: String, // etiqueta del set cargado (archivo o URL), vacia = nada cargado
     manifest: Option<SetManifest>,
     load_err: Option<String>,
+    /// Estado de la verificacion de firma del set cargado (se muestra afirmativo en la UI).
+    sig_status: Option<crate::signing::SigStatus>,
     plan: Option<sync::Plan>,
     plan_job: Option<Receiver<Result<sync::Plan, String>>>,
     consent: bool,
@@ -1288,6 +1290,19 @@ impl App {
             if !self.sync.source.is_empty() {
                 ui.label(egui::RichText::new(&self.sync.source).weak());
             }
+            // Verificacion de firma VISIBLE y afirmativa (no solo en caso de error).
+            match self.sync.sig_status {
+                Some(crate::signing::SigStatus::Verified) => {
+                    ui.colored_label(OK, "✓ Firma verificada — set autentico del publicador.");
+                }
+                Some(crate::signing::SigStatus::DevUnverified) => {
+                    ui.colored_label(
+                        WARN,
+                        "⚠ Firma NO verificada (modo dev): no confies en este set.",
+                    );
+                }
+                None => {}
+            }
             if let Some(bl) = &m.baselib_version {
                 ui.colored_label(WARN, format!("Requiere BaseLib {bl}."));
             }
@@ -1456,11 +1471,14 @@ impl App {
         self.sync.plan_job = None;
         self.sync.consent = false;
         self.sync.manifest = None;
+        self.sync.sig_status = None;
         self.sync.source = source;
-        if let Err(e) = crate::signing::verify_with_embedded(text.as_bytes(), signature.as_deref())
-        {
-            self.sync.load_err = Some(format!("firma invalida: {e:#}"));
-            return;
+        match crate::signing::verify_with_embedded(text.as_bytes(), signature.as_deref()) {
+            Ok(status) => self.sync.sig_status = Some(status),
+            Err(e) => {
+                self.sync.load_err = Some(format!("firma invalida: {e:#}"));
+                return;
+            }
         }
         match SetManifest::from_json_str(text) {
             Ok(m) => {
