@@ -9,6 +9,23 @@ un modder y sus amigos (gratis y rapida, por hash) es **un modulo mas**. GUI + C
 > instala de verdad** (`apply` transaccional + descarga de GitHub Releases, verificada por hash);
 > el delta intra-`.pck` es FASE 3 — ver [HANDOFF.md](HANDOFF.md).
 
+## Instalar (usuarios finales)
+
+1. Baja el ultimo **[Release](https://github.com/YX14ng/sts2-modsync/releases/latest)**:
+   `sts2-modsync-windows-x86_64.zip`.
+2. Descomprimi y corre **`sts2-modsync-gui.exe`** — es portable, no necesita instalador. (El
+   `.zip` trae tambien `sts2-modsync.exe`, la version de linea de comandos.)
+3. La primera vez detecta Slay the Spire 2 solo (Steam o por rutas comunes); si no lo halla, te
+   abre un dialogo para elegir la carpeta del juego.
+4. La app se **auto-actualiza** sola desde GitHub Releases (verifica firma y que el binario nuevo
+   arranque antes de reemplazarse; si falla, vuelve a la version anterior).
+
+> **Aviso de SmartScreen:** el binario no esta firmado con Authenticode (un certificado pago), asi
+> que Windows SmartScreen puede mostrar *"Windows protegio tu PC / editor desconocido"*. Es
+> esperable. Para correrlo: **Mas informacion -> Ejecutar de todas formas**. El `.zip` del release
+> incluye su firma **minisign** (`.zip.minisig`) por si queres verificarlo. Si algo falla, hay un
+> log en `%APPDATA%\sts2-modsync\sts2-modsync.log`.
+
 ## Como funciona (resumen)
 
 - **Detecta** StS2 via Steam (AppID 2868840) o, si no, por rutas comunes; si nada, abre

@@ -87,6 +87,8 @@ fn nav_item(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
 }
 
 pub fn run() -> eframe::Result {
+    // Log + panic-hook a %APPDATA% (el GUI puede no tener consola; un crash debe dejar rastro).
+    crate::logging::init("gui");
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
@@ -558,6 +560,16 @@ impl App {
                     do_update = true;
                 }
             });
+            // Notas del release ANTES de actualizar (que sabe que cambia).
+            if !rel.notes.trim().is_empty() {
+                ui.collapsing("Ver notas del release", |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(rel.notes.trim()).weak());
+                        });
+                });
+            }
             if do_update {
                 let ctx = ui.ctx().clone();
                 self.start_update(&ctx, rel);

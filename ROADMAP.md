@@ -25,19 +25,20 @@ y `is_game_running` fragil.
 
 ## 2. Criterios de 1.0.0 (Definition of Done)
 
-- [ ] CI en push/PR: `fmt --check` + `clippy -D warnings` + `cargo test` + `build --features gui`,
-      y el mismo gate ANTES de `gh release create`.
-- [ ] `manager.rs` con tests (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip).
-- [ ] Auto-update con tests (`extract_named`, `release_from_json`, filtro de tags `v*`).
+- [x] CI en push/PR: `fmt --check` + `clippy -D warnings` + `cargo test` + `build --features gui`,
+      y el mismo gate ANTES de `gh release create`. **(0.3)**
+- [x] `manager.rs` con tests (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip). **(0.3)**
+- [x] Auto-update con tests (`extract_named`, `release_from_json`, filtro de tags `v*`). **(0.3)**
 - [ ] `transport.rs` con tests (mock loopback: Range 206/200, tamano final, `join_url`).
+      (Parcial: `join_url`/`require_https` testeados; falta el mock loopback de Range — ver fase 0.4.)
 - [x] `sync::apply` realmente transaccional (rename con backup+rollback). **(0.2.4)**
 - [x] `is_game_running` robusto (nunca mutar `mods/` con el juego abierto). **(0.2.4)**
 - [x] Errores nunca tragados (huerfanos no borrados se reportan; hash-mismatch reintenta). **(0.2.4)**
 - [x] Seguridad enforced en codigo (`http://` rechazado; zip-slip del install local cerrado). **(0.2.4)**
-- [ ] LICENSE + `license=` en Cargo.toml + README de usuario final (aviso SmartScreen).
-- [ ] Auto-update recuperable (`.bak` del exe viejo + verificar arranque).
-- [ ] Logging a archivo en %APPDATA% + panic-hook (el GUI no tiene consola).
-- [ ] Config versionada (no perder `install_root`/`subscribed_sets` en silencio).
+- [x] LICENSE + `license=` en Cargo.toml + README de usuario final (aviso SmartScreen). **(0.2.6)**
+- [x] Auto-update recuperable (`.bak` del exe viejo + verificar arranque). **(0.2.6)**
+- [x] Logging a archivo en %APPDATA% + panic-hook (el GUI no tiene consola). **(0.2.6)**
+- [x] Config versionada (no perder `install_root`/`subscribed_sets` en silencio). **(0.2.6)**
 - [ ] Cancelacion + progreso detallado en sync/publish/install.
 - [ ] Feedback de UI honesto (`install_note` se renderiza; firma visible/afirmativa).
 
@@ -74,13 +75,14 @@ y `is_game_running` fragil.
 - [x] `SECURITY.md` (modelo de confianza + reporte) + tests negativos (`require_https`,
   `verify_with_embedded` exige firma cuando hay pubkey).
 
-### 0.6 — Distribuible y diagnosticable · effort bajo-medio
-- LICENSE (MIT/Apache-2.0) + campo `license`. **(BLOQUEANTE legal, bajo)**
-- README usuario final (link al release, single-exe, aviso SmartScreen). **(BLOQUEANTE, bajo)**
-- Auto-update recuperable (`.bak` + verificar arranque + volver atras).
-- Logging a %APPDATA% + panic-hook.
-- Config versionada (`schema_version`, sin `unwrap_or_default()` silencioso).
-- CHANGELOG.md + mostrar `rel.notes` antes de actualizar.
+### 0.6 — Distribuible y diagnosticable · effort bajo-medio · **HECHA (0.2.6)**
+- [x] LICENSE (MIT) + campo `license`. **(BLOQUEANTE legal, bajo)**
+- [x] README usuario final (link al release, single-exe, aviso SmartScreen). **(BLOQUEANTE, bajo)**
+- [x] Auto-update recuperable: `.bak` del exe viejo + `--health-check` del nuevo + rollback (y si
+  el rollback falla, preserva el `.bak`).
+- [x] Logging a `%APPDATA%/sts2-modsync/sts2-modsync.log` + panic-hook (con backtrace; rota a 1 MiB).
+- [x] Config versionada (`schema`): config corrupta se respalda en `.toml.bad`, no se resetea en silencio.
+- [x] CHANGELOG.md + `rel.notes` mostradas antes de actualizar (GUI colapsable + CLI).
 
 ### 0.7 -> 1.0 — Pulido de producto (UX) · effort medio-alto
 - Cancelacion de sync/publish/install + limpieza al cancelar.

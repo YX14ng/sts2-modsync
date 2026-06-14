@@ -9,6 +9,7 @@ pub mod config;
 pub mod detect;
 pub mod hashing;
 pub mod launch;
+pub mod logging;
 pub mod manager;
 pub mod manifest;
 pub mod modlist;

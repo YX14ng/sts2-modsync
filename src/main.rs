@@ -25,6 +25,11 @@ fn main() -> Result<()> {
         print_help();
         return Ok(());
     }
+    // Self-test del auto-update (lo invoca `update::apply` sobre el exe nuevo): salir 0 rapido.
+    if matches!(cmd, "--health-check" | "health-check") {
+        println!("sts2-modsync {} OK", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if cmd == "update" {
         return cmd_update();
     }
@@ -340,11 +345,15 @@ fn cmd_update() -> Result<()> {
     match update::check_latest()? {
         None => println!("no hay releases publicados todavia."),
         Some(rel) if update::is_newer(&rel.version, update::current_version()) => {
-            println!(
-                "version nueva: {} — bajando y reemplazando el ejecutable...",
-                rel.tag
-            );
-            update::apply(&rel)?; // reemplaza + relanza + exit; no retorna en exito
+            println!("version nueva: {} disponible.", rel.tag);
+            if !rel.notes.trim().is_empty() {
+                println!(
+                    "\n--- notas del release ---\n{}\n-------------------------",
+                    rel.notes.trim()
+                );
+            }
+            println!("bajando y reemplazando el ejecutable...");
+            update::apply(&rel)?; // reemplaza + verifica arranque + relanza + exit; no retorna en exito
         }
         Some(rel) => println!("ya estas al dia ({}).", rel.tag),
     }

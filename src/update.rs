@@ -175,13 +175,58 @@ pub fn apply(rel: &Release) -> Result<()> {
         .context("la firma del binario de update NO valida — se aborta la actualizacion")?;
 
     let cur = std::env::current_exe().context("current_exe")?;
-    let tmp_exe = cur.with_extension("new");
-    extract_named(&bytes, ASSET_EXE, &tmp_exe)?;
 
-    // Limpiar el temp pase lo que pase (exito o si self_replace falla).
-    let res = self_replace::self_replace(&tmp_exe).context("reemplazando el ejecutable");
-    let _ = std::fs::remove_file(&tmp_exe);
-    res?;
+    // RECUPERABLE: respaldar el exe actual ANTES de pisarlo (en Windows se puede copiar aunque
+    // este en uso). Sin respaldo no hay rollback -> abortar por seguridad (no arriesgar brickear).
+    let bak = cur.with_extension("bak");
+    std::fs::copy(&cur, &bak)
+        .with_context(|| format!("respaldando el exe actual en {}", bak.display()))?;
+
+    let tmp_exe = cur.with_extension("new");
+    let res = extract_named(&bytes, ASSET_EXE, &tmp_exe)
+        .and_then(|()| self_replace::self_replace(&tmp_exe).context("reemplazando el ejecutable"));
+    let _ = std::fs::remove_file(&tmp_exe); // limpiar el temp pase lo que pase
+    if let Err(e) = res {
+        // NO borrar el .bak aca: si self_replace fallo a mitad, es la unica copia del exe viejo.
+        // (Si solo fallo la extraccion, el exe actual quedo intacto y el .bak es redundante; un
+        // update posterior lo sobreescribe con `copy`.) Se conserva por seguridad.
+        crate::logging::log_line(&format!(
+            "auto-update: fallo antes del health-check ({e:#}); respaldo conservado en {}",
+            bak.display()
+        ));
+        return Err(e);
+    }
+
+    // VERIFICAR ARRANQUE: correr el exe nuevo con `--health-check` (arranca y sale 0 sin abrir
+    // ventana). Si no arranca (binario corrupto/incompatible), volver al respaldo y abortar.
+    let healthy = std::process::Command::new(&cur)
+        .arg("--health-check")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !healthy {
+        crate::logging::log_line(
+            "auto-update: el exe nuevo fallo el health-check; rollback al .bak",
+        );
+        match self_replace::self_replace(&bak) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&bak); // rollback OK: el respaldo ya no hace falta
+                bail!(
+                    "la version nueva no arranco (health-check) — se volvio a la version anterior"
+                );
+            }
+            Err(e) => {
+                // El rollback FALLO: preservar el .bak (es la unica copia del exe viejo).
+                crate::logging::log_line(&format!("auto-update: rollback fallo: {e:#}"));
+                bail!(
+                    "la version nueva no arranco y el rollback fallo: restaura a mano desde {}",
+                    bak.display()
+                );
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&bak); // exito: descartar el respaldo
+    crate::logging::log_line(&format!("auto-update: actualizado a {}", rel.tag));
 
     std::process::Command::new(&cur)
         .spawn()
