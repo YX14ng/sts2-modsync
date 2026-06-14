@@ -3,6 +3,20 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.0.0] - 2026-06-14 — Primera version estable
+
+Cierre del roadmap a 1.0: el flujo central (detectar, mod manager, sync transaccional firmado,
+publish, auto-update recuperable, P2P) es robusto, seguro, diagnosticable y comodo para
+no-tecnicos. Las fases 0.4 → 0.7 (integridad transaccional, seguridad de la cadena,
+distribuible/diagnosticable, pulido UX) estan completas y revisadas adversarialmente.
+
+- Ultimo item del Definition of Done cerrado: tests de `transport.rs` con un mock loopback que
+  ejercita la descarga full (200) y el resume con HTTP Range (206) + chequeo de tamano final.
+- `require_https` ahora permite `http://` SOLO a loopback (127.0.0.1 / localhost / [::1]): ese
+  trafico no sale de la maquina (no hay MITM) y habilita mirrors/tests locales.
+
+Ver las entradas 0.2.4–0.2.7 para el detalle de cada fase.
+
 ## [0.2.7] - 2026-06-14 — Pulido de producto / UX (fase 0.7)
 
 - **Cache de hashes** (`%APPDATA%\sts2-modsync\hashcache.json`): no re-hashea los `.pck` de 100+ MB

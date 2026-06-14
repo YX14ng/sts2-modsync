@@ -158,13 +158,31 @@ pub fn get_text(url: &str) -> Result<String> {
 }
 
 /// Rechaza URLs `http://` (defensa en profundidad): manifest, firma Y assets (.dll/.pck que el
-/// juego ejecuta) se bajan SIEMPRE por HTTPS. Una base local/relativa para tests no es `http://`
-/// y pasa.
+/// juego ejecuta) se bajan SIEMPRE por HTTPS. EXCEPCION: `http://` a LOOPBACK
+/// (127.0.0.1 / localhost / [::1]) se permite — ese trafico no sale de la maquina, no hay MITM
+/// posible, y habilita mirrors/tests locales. Una base local/relativa (sin `http://`) tambien pasa.
 pub fn require_https(url: &str) -> Result<()> {
-    if url.trim_start().to_ascii_lowercase().starts_with("http://") {
+    let lower = url.trim_start().to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("http://")
+        && !is_loopback_host(rest)
+    {
         bail!("URL insegura (http://): se exige HTTPS — {url}");
     }
     Ok(())
+}
+
+/// True si lo que sigue a `http://` apunta a un host de loopback EXACTO (seguido de `:`puerto,
+/// `/`ruta o fin). Evita el bypass tipo `127.0.0.1.evil.com`.
+fn is_loopback_host(after_scheme: &str) -> bool {
+    let host_port = after_scheme.split('/').next().unwrap_or("");
+    for h in ["127.0.0.1", "localhost", "[::1]"] {
+        if let Some(tail) = host_port.strip_prefix(h)
+            && (tail.is_empty() || tail.starts_with(':'))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Une `base` + `path` relativo con una sola `/`.
@@ -195,10 +213,83 @@ mod tests {
     }
 
     #[test]
-    fn require_https_rechaza_http_y_acepta_https_o_relativa() {
+    fn require_https_rechaza_http_salvo_loopback() {
         assert!(require_https("http://example/x").is_err());
         assert!(require_https("  HTTP://EXAMPLE/x").is_err()); // case/espacios
         assert!(require_https("https://example/x").is_ok());
         assert!(require_https("set-manifest.json").is_ok()); // base local/relativa (tests)
+        // loopback http:// permitido (no hay MITM); pero el bypass tipo 127.0.0.1.evil NO.
+        assert!(require_https("http://127.0.0.1:8080/a").is_ok());
+        assert!(require_https("http://localhost/a").is_ok());
+        assert!(require_https("http://[::1]:9/a").is_ok());
+        assert!(require_https("http://127.0.0.1.evil.com/a").is_err());
+        assert!(require_https("http://localhost.evil.com/a").is_err());
+    }
+
+    /// Mock loopback: verifica que `GitHubReleases::fetch` baja entero (200) y REANUDA con
+    /// Range (206) completando el `.part`, y que respeta el tamano final esperado.
+    #[test]
+    fn fetch_full_200_y_resume_206_contra_un_mock() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let body: &[u8] = b"0123456789ABCDEF"; // 16 bytes conocidos
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body_vec = body.to_vec();
+        let server = std::thread::spawn(move || {
+            // Atiende 2 conexiones: full (sin Range) y resume (con Range).
+            for _ in 0..2 {
+                let (mut sock, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let range_start = req
+                    .lines()
+                    .find(|l| l.to_ascii_lowercase().starts_with("range:"))
+                    .and_then(|l| l.split('=').nth(1))
+                    .and_then(|s| s.trim().trim_end_matches('-').parse::<usize>().ok());
+                let (status, part) = match range_start {
+                    Some(start) => ("206 Partial Content", &body_vec[start..]),
+                    None => ("200 OK", &body_vec[..]),
+                };
+                // `Connection: close` -> el cliente NO reusa el socket (2 conexiones reales).
+                let hdr = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    part.len()
+                );
+                sock.write_all(hdr.as_bytes()).unwrap();
+                sock.write_all(part).unwrap();
+                let _ = sock.flush();
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}/");
+        let entry = FileEntry {
+            path: "Mod/a.bin".into(),
+            size: body.len() as u64,
+            blake3: "00".into(), // el hash lo verifica apply, no transport
+        };
+        let dest = std::env::temp_dir().join(format!("sts2_transport_mock_{port}.part"));
+        let _ = std::fs::remove_file(&dest);
+        let src = GitHubReleases::new();
+
+        // 1) Sin `.part` -> baja entero (200).
+        let mut got = 0u64;
+        src.fetch(&base, &entry, &dest, &mut |n| {
+            got += n;
+            true
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        assert_eq!(got, body.len() as u64);
+
+        // 2) `.part` parcial (6 bytes) -> pide Range, server responde 206, completa.
+        std::fs::write(&dest, &body[..6]).unwrap();
+        src.fetch(&base, &entry, &dest, &mut |_| true).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&dest);
     }
 }

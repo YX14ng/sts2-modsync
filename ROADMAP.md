@@ -12,25 +12,33 @@
 
 ## 1. Donde estamos
 
-0.2.3 **funcionalmente completo pero NO en grado 1.0**: el flujo central (detectar, mod manager,
-sync transaccional firmado, publish, auto-update, P2P) funciona. Lo que falta NO son features, es
-**confianza/estabilidad/UX para no-tecnicos**. Las dimensiones duras (robustez, testing, seguridad,
-distribucion) tienen bloqueantes; "Features y UX" no tiene ninguno.
+**1.0.0 — ALCANZADO.** Todos los criterios del Definition of Done (§2) estan cumplidos y las fases
+0.3 → 0.7 (CI/tests, integridad transaccional, seguridad de la cadena, distribuible/diagnosticable,
+pulido UX) estan completas, cada una revisada adversarialmente antes de su release. El flujo central
+(detectar, mod manager, sync transaccional FIRMADA, publish, auto-update RECUPERABLE, P2P) es robusto,
+seguro y comodo para no-tecnicos.
 
-Agujeros sistemicos: **(a)** no hay CI de test/lint (solo release por tag) -> un tag puede
-auto-distribuir una regresion via auto-update; **(b)** los modulos peligrosos (`manager.rs`,
-`transport.rs`, el `apply` del auto-update que EJECUTA un binario) tienen **cero tests**; **(c)**
-falta LICENSE. Mas dos fallas de integridad: rename no atomico ante fallo parcial en `sync::apply`
-y `is_game_running` fragil.
+Lo que sigue son los **features post-1.0** (§7): single `.exe`, login de GitHub + repo de mods
+automatico, y sacar la dependencia del `.minisig`. Fuera de 1.0 tambien: delta intra-`.pck`.
+
+<details><summary>Contexto historico (estado en 0.2.3, antes de cerrar 1.0)</summary>
+
+0.2.3 era funcionalmente completo pero NO en grado 1.0: faltaba **confianza/estabilidad/UX**.
+Agujeros sistemicos que se cerraron: **(a)** no habia CI de test/lint (cerrado en 0.3); **(b)** los
+modulos peligrosos (`manager.rs`, `transport.rs`, el `apply` del auto-update) tenian cero tests
+(cerrado en 0.3/0.4/1.0); **(c)** faltaba LICENSE (cerrado en 0.3). Mas dos fallas de integridad
+(rename no atomico en `sync::apply`, `is_game_running` fragil) cerradas en 0.4.
+</details>
 
 ## 2. Criterios de 1.0.0 (Definition of Done)
+
+> **TODOS cumplidos en v1.0.0** (verificado contra el codigo, no solo tildado).
 
 - [x] CI en push/PR: `fmt --check` + `clippy -D warnings` + `cargo test` + `build --features gui`,
       y el mismo gate ANTES de `gh release create`. **(0.3)**
 - [x] `manager.rs` con tests (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip). **(0.3)**
 - [x] Auto-update con tests (`extract_named`, `release_from_json`, filtro de tags `v*`). **(0.3)**
-- [ ] `transport.rs` con tests (mock loopback: Range 206/200, tamano final, `join_url`).
-      (Parcial: `join_url`/`require_https` testeados; falta el mock loopback de Range — ver fase 0.4.)
+- [x] `transport.rs` con tests (mock loopback: Range 206/200, tamano final, `join_url`). **(1.0.0)**
 - [x] `sync::apply` realmente transaccional (rename con backup+rollback). **(0.2.4)**
 - [x] `is_game_running` robusto (nunca mutar `mods/` con el juego abierto). **(0.2.4)**
 - [x] Errores nunca tragados (huerfanos no borrados se reportan; hash-mismatch reintenta). **(0.2.4)**

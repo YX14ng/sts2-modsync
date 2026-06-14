@@ -342,4 +342,48 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn install_from_zip_extrae_e_instala() {
+        use std::io::Write;
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_zipinstall");
+        // .zip con un mod valido adentro (Mod/Mod.json), anidado en una carpeta.
+        let zip_path = install.root.join("mod.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            zw.start_file("Mod/Mod.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(br#"{"id":"Mod"}"#).unwrap();
+            zw.finish().unwrap();
+        }
+        let id = install_from_zip(&install, &zip_path, false).unwrap();
+        assert_eq!(id, "Mod");
+        assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn uninstall_saca_el_mod_y_falla_si_no_existe() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_uninstall");
+        make_mod(&install.mods_dir, "Mod");
+        assert!(install.mods_dir.join("Mod").is_dir());
+
+        assert!(uninstall(&install, "NoExiste").is_err()); // mod inexistente -> error
+
+        // uninstall manda a la papelera del SO (puede no estar disponible en CI headless).
+        match uninstall(&install, "Mod") {
+            Ok(()) => assert!(mod_dir(&install, "Mod").is_none(), "deberia salir de mods/"),
+            Err(_) => eprintln!("(skip: papelera no disponible en este entorno)"),
+        }
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
 }

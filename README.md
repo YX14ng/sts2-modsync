@@ -5,9 +5,10 @@
 **perfiles** y el **orden de carga**, y **lanza** el juego. La **sincronizacion de sets** entre
 un modder y sus amigos (gratis y rapida, por hash) es **un modulo mas**. GUI + CLI.
 
-> Estado: mod manager funcional (GUI con pestañas Mods/Sync/Perfiles + CLI). La sync ya **baja e
-> instala de verdad** (`apply` transaccional + descarga de GitHub Releases, verificada por hash);
-> el delta intra-`.pck` es FASE 3 — ver [HANDOFF.md](HANDOFF.md).
+> Estado: **1.0.0** — estable. Mod manager + sync transaccional firmada + auto-update recuperable +
+> P2P, con CI, logging, y UX pulida para no-tecnicos (ver [CHANGELOG.md](CHANGELOG.md) y
+> [ROADMAP.md](ROADMAP.md)). El delta intra-`.pck` (re-bajar solo el trozo cambiado de un `.pck`)
+> queda fuera de 1.0 — ver [HANDOFF.md](HANDOFF.md).
 
 ## Instalar (usuarios finales)
 
