@@ -30,10 +30,10 @@ y `is_game_running` fragil.
 - [ ] `manager.rs` con tests (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip).
 - [ ] Auto-update con tests (`extract_named`, `release_from_json`, filtro de tags `v*`).
 - [ ] `transport.rs` con tests (mock loopback: Range 206/200, tamano final, `join_url`).
-- [ ] `sync::apply` realmente transaccional (rename con backup+rollback).
-- [ ] `is_game_running` robusto (nunca mutar `mods/` con el juego abierto).
-- [ ] Errores nunca tragados (huerfanos no borrados se reportan; hash-mismatch reintenta).
-- [ ] Seguridad enforced en codigo (`http://` rechazado; zip-slip del install local cerrado).
+- [x] `sync::apply` realmente transaccional (rename con backup+rollback). **(0.2.4)**
+- [x] `is_game_running` robusto (nunca mutar `mods/` con el juego abierto). **(0.2.4)**
+- [x] Errores nunca tragados (huerfanos no borrados se reportan; hash-mismatch reintenta). **(0.2.4)**
+- [x] Seguridad enforced en codigo (`http://` rechazado; zip-slip del install local cerrado). **(0.2.4)**
 - [ ] LICENSE + `license=` en Cargo.toml + README de usuario final (aviso SmartScreen).
 - [ ] Auto-update recuperable (`.bak` del exe viejo + verificar arranque).
 - [ ] Logging a archivo en %APPDATA% + panic-hook (el GUI no tiene consola).
@@ -52,13 +52,17 @@ y `is_game_running` fragil.
 - Tests `transport.rs` con mock loopback; correr el loopback P2P (hoy `#[ignore]`) en un job.
 - `rust-toolchain.toml` (builds reproducibles).
 
-### 0.4 — Integridad transaccional · effort medio
-- Rename transaccional con backup+rollback ante fallo parcial. **(BLOQUEANTE)**
-- Endurecer `is_game_running`. **(BLOQUEANTE)**
-- No tragar errores (huerfanos no borrados; reintento ante hash-mismatch).
-- Gestion de `.part` (excluir de huerfanos, barrer stale, limpiar staging P2P).
-- Casos borde Windows (long-paths >260, zip-slip en copy/extract, pre-check de disco).
-- Resume Range que re-baja de cero si el `.part` quedo corrupto.
+### 0.4 — Integridad transaccional · effort medio · **HECHA (0.2.4)**
+- [x] Rename transaccional con backup+rollback ante fallo parcial (backups en subdir reservado
+  `mods/.modsync-backup/bak-<n>`, nombre libre para no pisar respaldos de un run previo). **(BLOQUEANTE)**
+- [x] Endurecer `is_game_running` (decisor puro `any_is_game`: matchea nombre o basename del exe).
+- [x] No tragar errores: `ApplyReport.orphans_failed` se reporta en la UI; `fetch_verified` reintenta.
+- [x] Gestion de `.part`: excluidos de huerfanos (`is_part_file`) + `sweep_parts` barre los stale.
+  (Limpiar el staging P2P de `HybridSource` queda pendiente — es interno de `torrent.rs`.)
+- [x] Casos borde Windows: `long_path` (`\\?\` + UNC `\\?\UNC\`), zip-slip del install local
+  (extraccion por `enclosed_name` + chequeo por componentes), pre-check de disco (`free_space_for`).
+- [x] Resume Range que re-baja de cero si el `.part` quedo corrupto (truncado en el reintento).
+- Validacion del `id` del manifest (cierra el escape de `mods_dir.join(id)` en orphan-scan/sweep).
 
 ### 0.5 — Seguridad de la cadena · effort medio
 - HTTPS enforced (rechazar `http://`). **(importante, bajo)**

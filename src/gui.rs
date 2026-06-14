@@ -415,7 +415,7 @@ enum SyncScreen {
 enum SyncProgress {
     Status(String),
     Bytes { done: u64, total: u64 },
-    Done,
+    Done(Option<String>), // nota opcional (p.ej. huerfanos que no se pudieron borrar)
     Failed(String),
 }
 
@@ -1518,7 +1518,7 @@ impl App {
         self.sync.screen = SyncScreen::Progress;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<()> {
+            let result = (|| -> anyhow::Result<Option<String>> {
                 if detect::is_game_running() {
                     anyhow::bail!("El juego esta ABIERTO — cerralo antes de instalar.");
                 }
@@ -1547,7 +1547,7 @@ impl App {
                         Box::new(transport::GitHubReleases::new())
                     }
                 };
-                sync::apply(
+                let report = sync::apply(
                     &plan,
                     &manifest,
                     &install.mods_dir,
@@ -1557,10 +1557,17 @@ impl App {
                         ctx.request_repaint();
                     },
                 )?;
-                Ok(())
+                // No tragar errores: si quedaron huerfanos sin borrar, avisarlo en la pantalla final.
+                let note = (!report.orphans_failed.is_empty()).then(|| {
+                    format!(
+                        "Listo, pero {} huerfano(s) no se pudieron borrar (revisalos a mano).",
+                        report.orphans_failed.len()
+                    )
+                });
+                Ok(note)
             })();
             let _ = match result {
-                Ok(()) => tx.send(SyncProgress::Done),
+                Ok(note) => tx.send(SyncProgress::Done(note)),
                 Err(e) => tx.send(SyncProgress::Failed(format!("{e:#}"))),
             };
             ctx.request_repaint();
@@ -1579,9 +1586,9 @@ impl App {
                     self.sync.prog.done = done;
                     self.sync.prog.total = total;
                 }
-                Ok(SyncProgress::Done) => {
+                Ok(SyncProgress::Done(note)) => {
                     self.sync.prog.finished = true;
-                    self.sync.prog.status = "Listo".into();
+                    self.sync.prog.status = note.unwrap_or_else(|| "Listo".into());
                     self.mods_loaded = false; // el set cambio en disco -> re-escanear la lista
                     self.sync.plan = None; // el plan viejo quedo obsoleto
                 }

@@ -70,8 +70,10 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
             continue;
         }
         for entry in WalkDir::new(&dir).into_iter().filter_map(Result::ok) {
-            if entry.file_type().is_file() && !expected.contains(entry.path()) {
-                plan.orphans.push(entry.path().to_path_buf());
+            let p = entry.path();
+            // Los `.part` son descargas en curso/abortadas, NO huerfanos (se barren aparte).
+            if entry.file_type().is_file() && !is_part_file(p) && !expected.contains(p) {
+                plan.orphans.push(p.to_path_buf());
             }
         }
     }
@@ -84,13 +86,30 @@ fn rel_to_native(p: &str) -> PathBuf {
     p.split(['/', '\\']).collect()
 }
 
+/// Resultado de `apply`: nada se "traga" en silencio. Si algun huerfano no se pudo mandar a
+/// la papelera, se reporta aca (el set quedo instalado igual, pero hay basura que avisar).
+#[derive(Debug, Default)]
+pub struct ApplyReport {
+    /// Archivos instalados (renombrados desde su `.part`).
+    pub installed: usize,
+    /// Huerfanos que NO se pudieron borrar (se reportan en vez de tragarse el error).
+    pub orphans_failed: Vec<PathBuf>,
+}
+
+/// Intentos de descarga+verificacion por archivo antes de rendirse. Si el `.part` quedo
+/// corrupto (resume sobre basura), se borra y se baja de cero en el siguiente intento.
+const FETCH_ATTEMPTS: u32 = 2;
+
 /// Aplica el plan de forma TRANSACCIONAL (ver HANDOFF.md §sync):
-///  1. aborta si el juego corre (lock de .dll/.pck en Windows);
-///  2. baja cada `to_download` a `<dest>.part` (via `source`) y verifica su BLAKE3 —
-///     si algo falla, NO se renombro nada todavia (los `.part` quedan, se rehacen);
-///  3. SOLO si TODO verifico, renombra los `.part` -> destino (rapido) en orden
-///     topologico (libs antes que dependientes);
-///  4. manda los huerfanos a la papelera (reversible) tras el exito.
+///  1. aborta si el juego corre (lock de .dll/.pck en Windows) o si no entra en disco;
+///  2. baja cada `to_download` a `<dest>.part` (via `source`) y verifica su BLAKE3,
+///     reintentando DE CERO si el `.part` quedo corrupto — si algo falla, NO se renombro
+///     nada todavia (los `.part` validos quedan para reanudar);
+///  3. SOLO si TODO verifico, re-chequea el juego y renombra los `.part` -> destino en orden
+///     topologico con BACKUP + ROLLBACK: si un rename falla a mitad, deshace los ya hechos y
+///     restaura los archivos viejos (el set nunca queda a medio aplicar);
+///  4. manda los huerfanos a la papelera (reversible) tras el exito, REPORTA los que no se
+///     pudieron borrar, y barre los `.part` que hayan quedado.
 ///
 /// `on_progress` recibe el total de bytes bajados acumulado (para la barra de progreso).
 pub fn apply(
@@ -99,12 +118,26 @@ pub fn apply(
     mods_dir: &Path,
     source: &dyn ModSource,
     on_progress: &mut dyn FnMut(u64),
-) -> Result<()> {
+) -> Result<ApplyReport> {
     if crate::detect::is_game_running() {
         bail!("El juego esta ABIERTO — cerralo antes de instalar (lock de .dll/.pck).");
     }
 
-    // 1+2) Bajar TODO a `.part` + verificar blake3. Nada se renombra hasta que todo paso.
+    // Pre-check de disco (best-effort): no arrancar una descarga que no va a entrar.
+    if plan.bytes_to_download > 0
+        && let Some(free) = free_space_for(mods_dir)
+    {
+        let margin = (plan.bytes_to_download / 20).max(64 * 1024 * 1024);
+        let need = plan.bytes_to_download.saturating_add(margin);
+        if free < need {
+            bail!(
+                "espacio insuficiente en disco: hacen falta ~{} MB y hay {} MB libres",
+                need / 1_048_576,
+                free / 1_048_576
+            );
+        }
+    }
+
     let rank = order_rank(&plan.install_order);
     let mut done: u64 = 0;
 
@@ -116,25 +149,23 @@ pub fn apply(
         on_progress(done);
     })?;
 
+    // 1+2) Bajar TODO a `.part` + verificar blake3 (reintenta de cero si quedo corrupto).
     let mut staged: Vec<(PathBuf, PathBuf, usize)> = Vec::new(); // (part, dest, rank topologico)
     for entry in &plan.to_download {
         let dest = mods_dir.join(rel_to_native(&entry.path));
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
+            std::fs::create_dir_all(long_path(parent).as_ref())
                 .with_context(|| format!("creando {}", parent.display()))?;
         }
         let part = part_path(&dest);
-        source.fetch(&manifest.base_url, entry, &part, &mut |n| {
-            done += n;
-            on_progress(done);
-        })?;
-        if !hashing::matches(&part, &entry.blake3) {
-            let _ = std::fs::remove_file(&part);
-            bail!(
-                "el BLAKE3 no coincide tras bajar {} (asset corrupto o equivocado)",
-                entry.path
-            );
-        }
+        fetch_verified(
+            source,
+            &manifest.base_url,
+            entry,
+            &part,
+            &mut done,
+            on_progress,
+        )?;
         let mod_id = entry.path.split(['/', '\\']).next().unwrap_or("");
         let r = rank.get(mod_id).copied().unwrap_or(usize::MAX);
         staged.push((part, dest, r));
@@ -146,17 +177,233 @@ pub fn apply(
         bail!("el juego se abrio durante la descarga — cerralo y reintenta (no se instalo nada)");
     }
 
-    // 3) Todo verificado -> renombrar (casi atomico, raramente falla) en orden topologico.
+    // 3) Todo verificado -> renombrar en orden topologico, con backup + rollback transaccional.
     staged.sort_by_key(|&(_, _, r)| r);
-    for (part, dest, _) in &staged {
-        std::fs::rename(part, dest).with_context(|| format!("renombrando a {}", dest.display()))?;
-    }
+    commit_staged(&staged, mods_dir)?;
 
-    // 4) Huerfanos a la papelera (reversible) tras el exito.
+    // 4) Huerfanos a la papelera (reversible); reportar los que fallen (no tragar el error).
+    let mut report = ApplyReport {
+        installed: staged.len(),
+        orphans_failed: Vec::new(),
+    };
     for orphan in &plan.orphans {
-        let _ = trash::delete(orphan);
+        if trash::delete(orphan).is_err() {
+            report.orphans_failed.push(orphan.clone());
+        }
     }
+    sweep_parts(manifest, mods_dir); // limpiar `.part` que hayan quedado de intentos abortados
+    Ok(report)
+}
+
+/// Baja `entry` a `part` y verifica su BLAKE3, reintentando DE CERO si quedo corrupto (resume
+/// sobre basura -> hash distinto). El progreso del intento fallido se revierte para no inflar
+/// la barra. Borra el `.part` si se rinde (no deja basura que un resume futuro reanude).
+fn fetch_verified(
+    source: &dyn ModSource,
+    base_url: &str,
+    entry: &FileEntry,
+    part: &Path,
+    done: &mut u64,
+    on_progress: &mut dyn FnMut(u64),
+) -> Result<()> {
+    let part_io = long_path(part);
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=FETCH_ATTEMPTS {
+        if attempt > 1 {
+            // Reintento -> de cero: TRUNCAR el `.part` a 0 (no solo borrar) para que transport
+            // NUNCA reanude (Range) sobre datos corruptos. `File::create` deja tamano 0 ->
+            // transport ve `existing==0` y baja entero. Si ni eso se puede, el hash igual atrapa.
+            let _ = std::fs::File::create(part_io.as_ref());
+        }
+        let base = *done;
+        let res = source.fetch(base_url, entry, part_io.as_ref(), &mut |n| {
+            *done += n;
+            on_progress(*done);
+        });
+        match res {
+            Ok(()) if hashing::matches(part_io.as_ref(), &entry.blake3) => return Ok(()),
+            Ok(()) => {
+                last_err = Some(anyhow::anyhow!(
+                    "el BLAKE3 no coincide tras bajar {} (asset corrupto o equivocado)",
+                    entry.path
+                ));
+            }
+            Err(e) => last_err = Some(e),
+        }
+        // Revertir el progreso del intento fallido (la barra no debe avanzar por basura).
+        *done = base;
+        on_progress(*done);
+    }
+    let _ = std::fs::remove_file(part_io.as_ref());
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no se pudo bajar {}", entry.path)))
+}
+
+/// Subcarpeta reservada dentro de `mods/` para los backups del commit. NO es un mod (el
+/// orphan-scan solo recorre managed_ids) y `manifest::validate_ids` rechaza un mod con `:`/
+/// separadores, pero este nombre lleva `.` inicial: igual no colisiona porque el backup vive
+/// en su PROPIO subdir con nombres `bak-<n>` que ningun `dest` del manifest puede producir.
+const BACKUP_DIR: &str = ".modsync-backup";
+
+/// Renombra cada `.part` a su destino con BACKUP + ROLLBACK: respalda el archivo viejo (si
+/// habia) en `mods/.modsync-backup/bak-<n>` antes de pisarlo y, si algun rename falla, deshace
+/// TODO (restaura los viejos, saca los nuevos) para no dejar el set a medio aplicar. Recien al
+/// final descarta los backups. Si el rollback NO pudo restaurar algun viejo, NO borra los
+/// backups y lo REPORTA en el error (no se traga). Recuperacion ante CRASH a mitad del commit
+/// queda fuera de alcance (ver ROADMAP 0.6).
+fn commit_staged(staged: &[(PathBuf, PathBuf, usize)], mods_dir: &Path) -> Result<()> {
+    let backup_dir = mods_dir.join(BACKUP_DIR);
+    // journal: (dest, backup-del-viejo-si-habia) de cada swap ya aplicado, para deshacer.
+    let mut journal: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    let mut next: u64 = 0;
+    for (part, dest, _) in staged {
+        match swap_in(part, dest, &backup_dir, &mut next) {
+            Ok(backup) => journal.push((dest.clone(), backup)),
+            Err(e) => {
+                let failed = rollback(&journal);
+                if failed.is_empty() {
+                    discard_backups(&journal, &backup_dir); // estado viejo restaurado entero
+                    return Err(e.context(format!("instalando {}", dest.display())));
+                }
+                return Err(e.context(format!(
+                    "instalando {} y NO se pudieron restaurar {} archivo(s): los originales quedaron en {}",
+                    dest.display(),
+                    failed.len(),
+                    backup_dir.display()
+                )));
+            }
+        }
+    }
+    discard_backups(&journal, &backup_dir); // exito: descartar los respaldos
     Ok(())
+}
+
+/// Pisa `dest` con `part` de forma reversible: si `dest` existia, lo mueve a un backup unico en
+/// `backup_dir` (que devuelve) antes de renombrar `part`->`dest`. Si el rename falla, restaura el
+/// backup. Usa `dest_io` (long-path) para TODAS las comprobaciones y renames: el `exists()` DEBE
+/// mirar el mismo path verbatim que el rename, sino en rutas >260 sin long-path-OS daria un falso
+/// negativo y se pisaria el viejo sin respaldo.
+fn swap_in(part: &Path, dest: &Path, backup_dir: &Path, next: &mut u64) -> Result<Option<PathBuf>> {
+    let dest_io = long_path(dest);
+    let backup = if dest_io.exists() {
+        std::fs::create_dir_all(long_path(backup_dir).as_ref())
+            .with_context(|| format!("creando {}", backup_dir.display()))?;
+        // Elegir un nombre LIBRE: un commit previo que fallo su rollback pudo dejar backups
+        // (los originales del usuario) en este dir; reiniciar el contador en 0 NO debe pisarlos.
+        let b = loop {
+            let cand = backup_dir.join(format!("bak-{next}"));
+            *next += 1;
+            if !long_path(&cand).exists() {
+                break cand;
+            }
+        };
+        std::fs::rename(dest_io.as_ref(), long_path(&b).as_ref())
+            .with_context(|| format!("respaldando {}", dest.display()))?;
+        Some(b)
+    } else {
+        None
+    };
+    let part_io = long_path(part);
+    if let Err(e) = std::fs::rename(part_io.as_ref(), dest_io.as_ref()) {
+        if let Some(b) = &backup {
+            let _ = std::fs::rename(long_path(b).as_ref(), dest_io.as_ref()); // restaurar el viejo
+        }
+        return Err(anyhow::Error::new(e));
+    }
+    Ok(backup)
+}
+
+/// Deshace los swaps ya aplicados (orden inverso): restaura el viejo desde su backup (el rename
+/// REEMPLAZA al nuevo en Windows) o, si no habia viejo, saca el nuevo. Devuelve los `dest` que
+/// NO se pudieron restaurar (para reportarlos, no tragarlos).
+fn rollback(journal: &[(PathBuf, Option<PathBuf>)]) -> Vec<PathBuf> {
+    let mut failed = Vec::new();
+    for (dest, backup) in journal.iter().rev() {
+        let dest_io = long_path(dest);
+        match backup {
+            // rename del backup REEMPLAZA al archivo nuevo (atomico en Windows).
+            Some(b) if std::fs::rename(long_path(b).as_ref(), dest_io.as_ref()).is_ok() => {}
+            Some(_) => failed.push(dest.clone()), // no se pudo restaurar el viejo
+            None => {
+                // no habia viejo: sacar el nuevo para volver al estado previo.
+                if std::fs::remove_file(dest_io.as_ref()).is_err() && dest_io.exists() {
+                    failed.push(dest.clone());
+                }
+            }
+        }
+    }
+    failed
+}
+
+/// Descarta los backups del journal y borra el dir de backups si quedo vacio (best-effort).
+fn discard_backups(journal: &[(PathBuf, Option<PathBuf>)], backup_dir: &Path) {
+    for (_, backup) in journal {
+        if let Some(b) = backup {
+            let _ = std::fs::remove_file(long_path(b).as_ref());
+        }
+    }
+    let _ = std::fs::remove_dir(long_path(backup_dir).as_ref()); // solo borra si quedo vacio
+}
+
+/// True si la ruta termina en `.part` (descarga en curso/abortada, NO huerfano).
+fn is_part_file(p: &Path) -> bool {
+    p.extension()
+        .map(|e| e.eq_ignore_ascii_case("part"))
+        .unwrap_or(false)
+}
+
+/// Borra los `.part` que hayan quedado dentro de las carpetas gestionadas (de intentos
+/// abortados). Best-effort: los errores se ignoran (no es critico).
+fn sweep_parts(manifest: &SetManifest, mods_dir: &Path) {
+    for id in manifest.managed_ids() {
+        let dir = mods_dir.join(&id);
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&dir).into_iter().filter_map(Result::ok) {
+            if entry.file_type().is_file() && is_part_file(entry.path()) {
+                let _ = std::fs::remove_file(long_path(entry.path()).as_ref());
+            }
+        }
+    }
+}
+
+/// Espacio libre (bytes) en el volumen que contiene `path`, si se puede determinar.
+/// Best-effort: `None` si no se halla el disco (el pre-check se omite, no se bloquea).
+fn free_space_for(path: &Path) -> Option<u64> {
+    use sysinfo::Disks;
+    let disks = Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|d| path.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len()) // el mount mas especifico
+        .map(|d| d.available_space())
+}
+
+/// En Windows, prefija rutas absolutas largas (>~248 chars) con `\\?\` para superar el limite
+/// de 260 (MAX_PATH) en mods con arboles profundos. Solo actua si hace falta, para no alterar
+/// el caso comun ni las rutas cortas de los tests. En el resto de plataformas es identidad.
+#[cfg(windows)]
+fn long_path(p: &Path) -> std::borrow::Cow<'_, Path> {
+    use std::borrow::Cow;
+    let s = p.to_string_lossy();
+    if s.len() < 248 || s.starts_with("\\\\?\\") || !p.is_absolute() {
+        return Cow::Borrowed(p);
+    }
+    let s = s.replace('/', "\\");
+    // UNC (`\\server\share\...`) necesita la forma `\\?\UNC\server\share\...`; una ruta con
+    // letra de unidad va como `\\?\C:\...`. Anteponer `\\?\` a secas a una UNC da un prefijo
+    // malformado (`\\?\\\server`) que Windows rechaza.
+    let verbatim = match s.strip_prefix("\\\\") {
+        Some(rest) => format!("\\\\?\\UNC\\{rest}"),
+        None => format!("\\\\?\\{s}"),
+    };
+    Cow::Owned(PathBuf::from(verbatim))
+}
+
+#[cfg(not(windows))]
+fn long_path(p: &Path) -> std::borrow::Cow<'_, Path> {
+    std::borrow::Cow::Borrowed(p)
 }
 
 /// `<dest>` + ".part" (preserva la extension original: BaseLib.dll -> BaseLib.dll.part).
@@ -260,7 +507,9 @@ mod tests {
         assert_eq!(plan.to_download.len(), 1);
 
         let mut total = 0u64;
-        apply(&plan, &manifest, &base, &GoodSource, &mut |d| total = d).unwrap();
+        let report = apply(&plan, &manifest, &base, &GoodSource, &mut |d| total = d).unwrap();
+        assert_eq!(report.installed, 1);
+        assert!(report.orphans_failed.is_empty());
 
         let landed = base.join("Mod").join("a.txt");
         assert!(landed.is_file());
@@ -268,6 +517,189 @@ mod tests {
         assert!(!part_path(&landed).exists()); // el .part ya no esta
         assert_eq!(total, content_for("Mod/a.txt").len() as u64);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Falla la verificacion la 1ra vez (escribe basura en APPEND, simulando un `.part`
+    /// corrupto que un resume reanudaria) y acierta la 2da. Prueba que `fetch_verified`
+    /// borra el `.part` y baja DE CERO en el reintento (sino el contenido correcto quedaria
+    /// pegado a la basura y el hash seguiria mal).
+    struct FlakySource {
+        calls: std::sync::atomic::AtomicU32,
+    }
+    impl ModSource for FlakySource {
+        fn fetch(
+            &self,
+            _base: &str,
+            entry: &FileEntry,
+            dest: &Path,
+            on_bytes: &mut dyn FnMut(u64),
+        ) -> Result<()> {
+            use std::io::Write;
+            use std::sync::atomic::Ordering;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dest)?;
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                f.write_all(b"corrupto")?;
+                on_bytes(8);
+            } else {
+                let c = content_for(&entry.path);
+                f.write_all(&c)?;
+                on_bytes(c.len() as u64);
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn fetch_verified_reintenta_de_cero_si_quedo_corrupto() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let base = std::env::temp_dir().join("sts2_modsync_apply_flaky");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let manifest = manifest_one("Mod", "Mod/a.txt");
+        let plan = plan(&manifest, &base).unwrap();
+        let src = FlakySource {
+            calls: std::sync::atomic::AtomicU32::new(0),
+        };
+        let report = apply(&plan, &manifest, &base, &src, &mut |_| {}).unwrap();
+        assert_eq!(report.installed, 1);
+        let landed = base.join("Mod").join("a.txt");
+        assert_eq!(std::fs::read(&landed).unwrap(), content_for("Mod/a.txt"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn commit_staged_hace_rollback_si_falla_a_mitad() {
+        let base = std::env::temp_dir().join("sts2_modsync_commit_rollback");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // destA: archivo VIEJO + partA con el nuevo (swap OK). destB: archivo viejo pero su
+        // partB NO existe -> rename(partB -> destB) falla -> rollback debe restaurar destA.
+        let dest_a = base.join("a.txt");
+        std::fs::write(&dest_a, b"viejo A").unwrap();
+        std::fs::write(part_path(&dest_a), b"nuevo A").unwrap();
+        let dest_b = base.join("b.txt");
+        std::fs::write(&dest_b, b"viejo B").unwrap();
+        // part_path(&dest_b) a proposito NO se crea.
+
+        let staged = vec![
+            (part_path(&dest_a), dest_a.clone(), 0usize),
+            (part_path(&dest_b), dest_b.clone(), 1usize),
+        ];
+        assert!(commit_staged(&staged, &base).is_err());
+        assert_eq!(std::fs::read(&dest_a).unwrap(), b"viejo A"); // rollback al viejo
+        assert_eq!(std::fs::read(&dest_b).unwrap(), b"viejo B"); // swap_in lo restauro
+        assert!(!base.join(BACKUP_DIR).exists()); // sin backups colgados (dir vaciado y borrado)
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn commit_staged_no_colisiona_con_un_dest_que_termina_como_backup() {
+        // Antes los backups eran "<dest>.bak-modsync" y un set con ese path destruia datos.
+        // Ahora viven en un subdir reservado: instalar A y "A...bak-modsync" coexiste sin chocar.
+        let base = std::env::temp_dir().join("sts2_modsync_commit_nocollide");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dest_a = base.join("a.dll");
+        let dest_b = base.join("a.dll.bak-modsync"); // nombre que antes colisionaba
+        std::fs::write(&dest_a, b"viejo A").unwrap(); // ambos con un viejo presente
+        std::fs::write(&dest_b, b"viejo B").unwrap();
+        std::fs::write(part_path(&dest_a), b"nuevo A").unwrap();
+        std::fs::write(part_path(&dest_b), b"nuevo B").unwrap();
+        let staged = vec![
+            (part_path(&dest_a), dest_a.clone(), 0usize),
+            (part_path(&dest_b), dest_b.clone(), 0usize),
+        ];
+        commit_staged(&staged, &base).unwrap();
+        assert_eq!(std::fs::read(&dest_a).unwrap(), b"nuevo A");
+        assert_eq!(std::fs::read(&dest_b).unwrap(), b"nuevo B"); // NO se perdio
+        assert!(!base.join(BACKUP_DIR).exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn commit_staged_no_pisa_un_backup_preservado_de_un_run_previo() {
+        // Simula un commit previo cuyo rollback fallo y dejo el ORIGINAL del usuario en bak-0.
+        // Un commit nuevo arranca el contador en 0 pero NO debe reusar bak-0 y pisarlo.
+        let base = std::env::temp_dir().join("sts2_modsync_commit_preserved");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(BACKUP_DIR)).unwrap();
+        let preserved = base.join(BACKUP_DIR).join("bak-0");
+        std::fs::write(&preserved, b"ORIGINAL del usuario").unwrap();
+
+        let dest = base.join("a.dll");
+        std::fs::write(&dest, b"viejo").unwrap(); // hay un viejo -> se respalda en un bak libre
+        std::fs::write(part_path(&dest), b"nuevo").unwrap();
+        let staged = vec![(part_path(&dest), dest.clone(), 0usize)];
+        commit_staged(&staged, &base).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"nuevo");
+        // el backup preservado del run previo sigue INTACTO (no se piso con bak-0).
+        assert_eq!(std::fs::read(&preserved).unwrap(), b"ORIGINAL del usuario");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn plan_no_marca_los_part_como_huerfanos() {
+        let base = std::env::temp_dir().join("sts2_modsync_plan_part");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Mod")).unwrap();
+        let manifest = manifest_one("Mod", "Mod/a.txt");
+        std::fs::write(base.join("Mod").join("a.txt"), content_for("Mod/a.txt")).unwrap();
+        std::fs::write(base.join("Mod").join("a.txt.part"), b"a medias").unwrap();
+        std::fs::write(base.join("Mod").join("viejo.txt"), b"huerfano").unwrap();
+        let plan = plan(&manifest, &base).unwrap();
+        assert!(plan.up_to_date.contains(&"Mod/a.txt".to_string()));
+        let orphans: Vec<String> = plan
+            .orphans
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        assert!(
+            orphans.iter().any(|o| o.ends_with("viejo.txt")),
+            "viejo.txt deberia ser huerfano"
+        );
+        assert!(
+            !orphans.iter().any(|o| o.ends_with(".part")),
+            "el .part NO debe ser huerfano: {orphans:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn long_path_solo_actua_en_rutas_largas() {
+        let short = std::env::temp_dir().join("x");
+        assert_eq!(long_path(&short).as_ref(), short.as_path()); // identidad en lo comun
+        #[cfg(windows)]
+        {
+            let long = "d".repeat(300);
+            // ruta larga con letra de unidad -> prefijo verbatim.
+            let drive = PathBuf::from(format!("C:\\{long}\\f.dll"));
+            assert!(
+                long_path(&drive)
+                    .to_string_lossy()
+                    .starts_with("\\\\?\\C:\\")
+            );
+            // ruta UNC larga -> \\?\UNC\server\share\... (NO el \\?\\\server malformado).
+            let unc = PathBuf::from(format!("\\\\server\\share\\{long}\\f.dll"));
+            let got = long_path(&unc).to_string_lossy().into_owned();
+            assert!(
+                got.starts_with("\\\\?\\UNC\\server\\share\\"),
+                "UNC mal armada: {got}"
+            );
+            // ya-prefijada larga -> identidad (no duplicar el prefijo).
+            let pre = PathBuf::from(format!("\\\\?\\C:\\{long}\\f.dll"));
+            assert_eq!(long_path(&pre).as_ref(), pre.as_path());
+            // relativa larga -> identidad (\\?\ exige ruta absoluta).
+            let rel = PathBuf::from(format!("{long}\\f.dll"));
+            assert_eq!(long_path(&rel).as_ref(), rel.as_path());
+        }
     }
 
     #[test]

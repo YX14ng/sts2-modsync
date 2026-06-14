@@ -170,7 +170,37 @@ fn extract_zip_to_temp(zip_path: &Path) -> Result<PathBuf> {
     let mut archive = zip::ZipArchive::new(file).context("zip invalido")?;
     let tmp = unique_temp_dir("sts2_install");
     std::fs::create_dir_all(&tmp)?;
-    archive.extract(&tmp).context("extrayendo el zip")?;
+    // Extraccion MANUAL anti zip-slip: el install local desde `.zip` NO pasa por
+    // `validate_paths`, asi que se cierra aca. `enclosed_name()` descarta nombres con `..` o
+    // absolutos que escaparian de `tmp`; el chequeo por componentes es la red secundaria.
+    for i in 0..archive.len() {
+        let mut zf = archive.by_index(i).context("entrada de zip invalida")?;
+        let rel = match zf.enclosed_name() {
+            Some(p) => p.to_path_buf(),
+            None => bail!("entrada de zip insegura (zip-slip): {:?}", zf.name()),
+        };
+        // Red secundaria EFECTIVA: reconfirmar por componentes que `rel` no tenga `..`/raiz/
+        // prefijo (`Path::starts_with(tmp)` NO sirve: es lexico y no normaliza `..`).
+        use std::path::Component;
+        if rel
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+        {
+            bail!("entrada de zip insegura: {:?}", zf.name());
+        }
+        let out = tmp.join(&rel);
+        if zf.is_dir() {
+            std::fs::create_dir_all(&out)?;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut outf = std::fs::File::create(&out)
+                .with_context(|| format!("creando {}", out.display()))?;
+            std::io::copy(&mut zf, &mut outf)
+                .with_context(|| format!("extrayendo {}", out.display()))?;
+        }
+    }
     Ok(tmp)
 }
 
@@ -280,5 +310,36 @@ mod tests {
         // segunda vez sin overwrite -> error (ya existe).
         assert!(install_from_dir(&install, &src, false).is_err());
         let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn extract_zip_rechaza_zip_slip() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("sts2_modsync_zipslip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("evil.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            // entrada que intenta escapar del destino (zip-slip).
+            zw.start_file("../escape.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(b"pwned").unwrap();
+            zw.finish().unwrap();
+        }
+        // el destino REAL del escape: la extraccion va a temp_dir()/sts2_install_<n>, asi que
+        // "../escape.txt" caeria en temp_dir()/escape.txt (NO en `dir`, que era un assert muerto).
+        let real_escape = std::env::temp_dir().join("escape.txt");
+        let _ = std::fs::remove_file(&real_escape);
+        assert!(
+            extract_zip_to_temp(&zip_path).is_err(),
+            "un zip con ../ debe ser rechazado"
+        );
+        assert!(
+            !real_escape.exists(),
+            "el zip-slip NO debe escribir fuera del temp"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -117,15 +117,24 @@ pub fn ensure_mods_dir(install: &Install) -> Result<()> {
 pub fn is_game_running() -> bool {
     use sysinfo::System;
     let sys = System::new_all();
-    let full = EXE.to_ascii_lowercase();
-    sys.processes().values().any(|p| {
-        name_is_game(&p.name().to_string_lossy())
-            // Fallback: el basename del path del ejecutable (por si el nombre vino raro).
-            || p.exe()
-                .and_then(|e| e.file_name())
-                .map(|f| f.to_string_lossy().to_ascii_lowercase() == full)
-                .unwrap_or(false)
-    })
+    any_is_game(sys.processes().values().map(|p| {
+        let name = p.name().to_string_lossy().into_owned();
+        // Fallback: el basename del path del ejecutable (por si el nombre vino raro/truncado).
+        let exe = p
+            .exe()
+            .and_then(|e| e.file_name())
+            .map(|f| f.to_string_lossy().into_owned());
+        (name, exe)
+    }))
+}
+
+/// Decide si ALGUN proceso (por nombre o por basename de su exe) es el juego. Puro y
+/// testeable, separado de `sysinfo`. Un falso NEGATIVO seria grave (dejaria mutar `mods/`
+/// con el juego abierto), por eso se chequean ambos campos con la misma heuristica tolerante.
+fn any_is_game(procs: impl Iterator<Item = (String, Option<String>)>) -> bool {
+    procs
+        .into_iter()
+        .any(|(name, exe)| name_is_game(&name) || exe.as_deref().is_some_and(name_is_game))
 }
 
 /// True si `proc_name` corresponde al exe del juego. Tolerante a: mayusculas/minusculas, a que
@@ -157,5 +166,25 @@ mod tests {
         assert!(!name_is_game("slay")); // prefijo corto (<8) -> evita falsos positivos
         assert!(!name_is_game("SlayTheSpire3.exe"));
         assert!(!name_is_game(""));
+    }
+
+    #[test]
+    fn any_is_game_matchea_por_nombre_o_por_exe() {
+        // matchea por nombre del proceso.
+        assert!(any_is_game(
+            [("SlayTheSpire2.exe".to_string(), None)].into_iter()
+        ));
+        // nombre raro pero el basename del exe delata al juego (no es falso negativo).
+        assert!(any_is_game(
+            [("game".to_string(), Some("SlayTheSpire2.exe".to_string()))].into_iter()
+        ));
+        // ningun proceso es el juego.
+        assert!(!any_is_game(
+            [
+                ("notepad.exe".to_string(), Some("notepad.exe".to_string())),
+                ("explorer.exe".to_string(), None),
+            ]
+            .into_iter()
+        ));
     }
 }

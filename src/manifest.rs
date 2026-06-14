@@ -121,8 +121,30 @@ impl SetManifest {
         {
             bail!("base_url usa http:// inseguro — la sync exige HTTPS (usa https://)");
         }
+        self.validate_ids()?;
         self.validate_paths()?;
         self.validate_dependencies()?;
+        Ok(())
+    }
+
+    /// Cada `id` de mod debe ser un nombre de carpeta SIMPLE (sin vacio, separadores, `:`,
+    /// `..` ni `.`): el `id` alimenta `mods_dir.join(id)` en el orphan-scan y `sweep_parts`
+    /// de sync, asi que un `id` con `..`/separador/absoluto haria que el barrido ESCAPE de
+    /// `mods/` y borre archivos ajenos. Mismo criterio que `manager::safe_id`. (Sin esto, un
+    /// mod con `files: []` evade `validate_paths`, que solo mira `files[].path`.)
+    fn validate_ids(&self) -> Result<()> {
+        for m in &self.mods {
+            let id = &m.id;
+            if id.is_empty()
+                || id.contains('/')
+                || id.contains('\\')
+                || id.contains(':')
+                || id == ".."
+                || id == "."
+            {
+                bail!("id de mod invalido en el manifiesto: {id:?}");
+            }
+        }
         Ok(())
     }
 
@@ -318,6 +340,23 @@ mod tests {
     fn validate_paths_acepta_ruta_buena() {
         let m = manifest(vec![mod_with("BaseLib", &[], &["BaseLib/BaseLib.dll"])]);
         assert!(m.validate_paths().is_ok());
+    }
+
+    #[test]
+    fn validate_rechaza_id_malicioso_con_files_vacios() {
+        // Un mod con files:[] evade validate_paths (que solo mira files[].path); el `id`
+        // crudo alimenta mods_dir.join(id) en el orphan-scan/sweep de sync -> debe rechazarse
+        // ANTES de llegar ahi. Cubre el vector que escaparia de mods/.
+        for bad in ["..", ".", "../x", "C:\\evil", "a/b", "a\\b", ""] {
+            let m = manifest(vec![mod_with(bad, &[], &[])]);
+            assert!(m.validate().is_err(), "deberia rechazar id {bad:?}");
+        }
+        // id normal con files:[] sigue siendo valido.
+        assert!(
+            manifest(vec![mod_with("BaseLib", &[], &[])])
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]
