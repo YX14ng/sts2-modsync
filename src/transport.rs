@@ -15,8 +15,13 @@ pub trait ModSource {
     /// swarm y baja los archivos seleccionados juntos). `on_bytes` recibe los bytes NUEVOS
     /// a medida que llegan (para la barra). Default = no-op: las fuentes por-archivo (HTTP)
     /// no necesitan esto y bajan en `fetch`. Si `prepare` deja un archivo cacheado, `fetch`
-    /// NO debe volver a contar esos bytes (los reporto aca).
-    fn prepare(&self, _entries: &[FileEntry], _on_bytes: &mut dyn FnMut(u64)) -> Result<()> {
+    /// NO debe volver a contar esos bytes (los reporto aca). `on_bytes(n) -> bool`: devuelve
+    /// `false` para CANCELAR (el backend debe abortar limpio en cuanto lo vea).
+    fn prepare(
+        &self,
+        _entries: &[FileEntry],
+        _on_bytes: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -24,13 +29,14 @@ pub trait ModSource {
     /// con la cantidad de bytes NUEVOS de cada chunk (para la barra de progreso). NO
     /// verifica el hash: eso lo hace `sync::apply` tras bajar (separa transporte de
     /// verificacion, y apply ya tiene `hashing`). Si `prepare` ya dejo el archivo listo, la
-    /// impl puede moverlo y reportar 0 bytes (ya contados en `prepare`).
+    /// impl puede moverlo y reportar 0 bytes (ya contados en `prepare`). `on_bytes(n) -> bool`
+    /// devuelve `false` para CANCELAR: la impl debe cortar la descarga y devolver `Err`.
     fn fetch(
         &self,
         base_url: &str,
         entry: &FileEntry,
         dest: &Path,
-        on_bytes: &mut dyn FnMut(u64),
+        on_bytes: &mut dyn FnMut(u64) -> bool,
     ) -> Result<()>;
 }
 
@@ -68,7 +74,7 @@ impl ModSource for GitHubReleases {
         base_url: &str,
         entry: &FileEntry,
         dest: &Path,
-        on_bytes: &mut dyn FnMut(u64),
+        on_bytes: &mut dyn FnMut(u64) -> bool,
     ) -> Result<()> {
         // Content-addressed: el asset remoto se llama por su BLAKE3 (no por la ruta local).
         let url = join_url(base_url, &entry.blake3);
@@ -113,7 +119,9 @@ impl ModSource for GitHubReleases {
                 break;
             }
             file.write_all(&buf[..n]).context("escribiendo a disco")?;
-            on_bytes(n as u64);
+            if !on_bytes(n as u64) {
+                bail!("descarga cancelada");
+            }
         }
         file.flush().context("flush a disco")?;
 

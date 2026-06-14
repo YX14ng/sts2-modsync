@@ -9,6 +9,7 @@ use crate::transport::ModSource;
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
 #[derive(Debug, Default)]
@@ -48,13 +49,15 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
         ..Default::default()
     };
 
-    // 1) Que bajar vs que ya esta (hash por archivo = capa delta gruesa).
+    // 1) Que bajar vs que ya esta (hash por archivo = capa delta gruesa). El cache evita
+    // re-hashear los `.pck` que no cambiaron (compara size+mtime); se persiste en %APPDATA%.
+    let mut cache = hashing::HashCache::load();
     let mut expected: BTreeSet<PathBuf> = BTreeSet::new();
     for m in &manifest.mods {
         for f in &m.files {
             let local = mods_dir.join(rel_to_native(&f.path));
             expected.insert(local.clone());
-            if hashing::matches(&local, &f.blake3) {
+            if cache.matches(&local, &f.blake3) {
                 plan.up_to_date.push(f.path.clone());
             } else {
                 plan.bytes_to_download += f.size;
@@ -78,6 +81,7 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
         }
     }
 
+    cache.save(); // persistir los hashes nuevos para el proximo plan
     Ok(plan)
 }
 
@@ -111,13 +115,18 @@ const FETCH_ATTEMPTS: u32 = 2;
 ///  4. manda los huerfanos a la papelera (reversible) tras el exito, REPORTA los que no se
 ///     pudieron borrar, y barre los `.part` que hayan quedado.
 ///
-/// `on_progress` recibe el total de bytes bajados acumulado (para la barra de progreso).
+/// `on_progress` recibe el total de bytes bajados acumulado (para la barra). `on_file` recibe
+/// el `path` del archivo que se empieza a bajar (para "bajando X..."). `cancel` se chequea
+/// entre archivos Y durante cada descarga: si se setea, aborta limpio (nada se instalo; los
+/// `.part` quedan para reanudar despues).
 pub fn apply(
     plan: &Plan,
     manifest: &SetManifest,
     mods_dir: &Path,
     source: &dyn ModSource,
     on_progress: &mut dyn FnMut(u64),
+    on_file: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
 ) -> Result<ApplyReport> {
     if crate::detect::is_game_running() {
         bail!("El juego esta ABIERTO — cerralo antes de instalar (lock de .dll/.pck).");
@@ -147,11 +156,16 @@ pub fn apply(
     source.prepare(&plan.to_download, &mut |n| {
         done += n;
         on_progress(done);
+        !cancel.load(Ordering::Relaxed)
     })?;
 
     // 1+2) Bajar TODO a `.part` + verificar blake3 (reintenta de cero si quedo corrupto).
     let mut staged: Vec<(PathBuf, PathBuf, usize)> = Vec::new(); // (part, dest, rank topologico)
     for entry in &plan.to_download {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("sincronizacion cancelada (no se instalo nada)");
+        }
+        on_file(&entry.path);
         let dest = mods_dir.join(rel_to_native(&entry.path));
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(long_path(parent).as_ref())
@@ -165,6 +179,7 @@ pub fn apply(
             &part,
             &mut done,
             on_progress,
+            cancel,
         )?;
         let mod_id = entry.path.split(['/', '\\']).next().unwrap_or("");
         let r = rank.get(mod_id).copied().unwrap_or(usize::MAX);
@@ -205,10 +220,16 @@ fn fetch_verified(
     part: &Path,
     done: &mut u64,
     on_progress: &mut dyn FnMut(u64),
+    cancel: &AtomicBool,
 ) -> Result<()> {
     let part_io = long_path(part);
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 1..=FETCH_ATTEMPTS {
+        // Si se cancelo (posiblemente a mitad de un fetch), salir YA sin truncar ni borrar el
+        // `.part`: se preserva lo bajado para reanudar despues (lo que promete la doc/UI).
+        if cancel.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("sincronizacion cancelada"));
+        }
         if attempt > 1 {
             // Reintento -> de cero: TRUNCAR el `.part` a 0 (no solo borrar) para que transport
             // NUNCA reanude (Range) sobre datos corruptos. `File::create` deja tamano 0 ->
@@ -219,6 +240,7 @@ fn fetch_verified(
         let res = source.fetch(base_url, entry, part_io.as_ref(), &mut |n| {
             *done += n;
             on_progress(*done);
+            !cancel.load(Ordering::Relaxed)
         });
         match res {
             Ok(()) if hashing::matches(part_io.as_ref(), &entry.blake3) => return Ok(()),
@@ -467,7 +489,7 @@ mod tests {
             _base: &str,
             entry: &FileEntry,
             dest: &Path,
-            on_bytes: &mut dyn FnMut(u64),
+            on_bytes: &mut dyn FnMut(u64) -> bool,
         ) -> Result<()> {
             let c = content_for(&entry.path);
             std::fs::write(dest, &c)?;
@@ -484,7 +506,7 @@ mod tests {
             _base: &str,
             _entry: &FileEntry,
             dest: &Path,
-            on_bytes: &mut dyn FnMut(u64),
+            on_bytes: &mut dyn FnMut(u64) -> bool,
         ) -> Result<()> {
             std::fs::write(dest, b"basura")?;
             on_bytes(6);
@@ -507,7 +529,16 @@ mod tests {
         assert_eq!(plan.to_download.len(), 1);
 
         let mut total = 0u64;
-        let report = apply(&plan, &manifest, &base, &GoodSource, &mut |d| total = d).unwrap();
+        let report = apply(
+            &plan,
+            &manifest,
+            &base,
+            &GoodSource,
+            &mut |d| total = d,
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(report.installed, 1);
         assert!(report.orphans_failed.is_empty());
 
@@ -516,6 +547,32 @@ mod tests {
         assert_eq!(std::fs::read(&landed).unwrap(), content_for("Mod/a.txt"));
         assert!(!part_path(&landed).exists()); // el .part ya no esta
         assert_eq!(total, content_for("Mod/a.txt").len() as u64);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn apply_cancelado_no_instala_nada() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let base = std::env::temp_dir().join("sts2_modsync_apply_cancel");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let manifest = manifest_one("Mod", "Mod/a.txt");
+        let plan = plan(&manifest, &base).unwrap();
+        let cancel = AtomicBool::new(true); // ya cancelado antes de empezar
+        let err = apply(
+            &plan,
+            &manifest,
+            &base,
+            &GoodSource,
+            &mut |_| {},
+            &mut |_| {},
+            &cancel,
+        );
+        assert!(err.is_err(), "con cancel seteado debe abortar");
+        assert!(!base.join("Mod").join("a.txt").exists()); // no instalo nada
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -532,7 +589,7 @@ mod tests {
             _base: &str,
             entry: &FileEntry,
             dest: &Path,
-            on_bytes: &mut dyn FnMut(u64),
+            on_bytes: &mut dyn FnMut(u64) -> bool,
         ) -> Result<()> {
             use std::io::Write;
             use std::sync::atomic::Ordering;
@@ -566,7 +623,16 @@ mod tests {
         let src = FlakySource {
             calls: std::sync::atomic::AtomicU32::new(0),
         };
-        let report = apply(&plan, &manifest, &base, &src, &mut |_| {}).unwrap();
+        let report = apply(
+            &plan,
+            &manifest,
+            &base,
+            &src,
+            &mut |_| {},
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(report.installed, 1);
         let landed = base.join("Mod").join("a.txt");
         assert_eq!(std::fs::read(&landed).unwrap(), content_for("Mod/a.txt"));
@@ -710,7 +776,15 @@ mod tests {
         let manifest = manifest_one("Mod", "Mod/a.txt");
         let plan = plan(&manifest, &base).unwrap();
 
-        let err = apply(&plan, &manifest, &base, &BadSource, &mut |_| {});
+        let err = apply(
+            &plan,
+            &manifest,
+            &base,
+            &BadSource,
+            &mut |_| {},
+            &mut |_| {},
+            &AtomicBool::new(false),
+        );
         assert!(err.is_err());
         // el destino NO se creo (solo habia un .part, que se borro al fallar la verificacion).
         assert!(!base.join("Mod").join("a.txt").exists());

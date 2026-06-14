@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [0.2.7] - 2026-06-14 — Pulido de producto / UX (fase 0.7)
+
+- **Cache de hashes** (`%APPDATA%\sts2-modsync\hashcache.json`): no re-hashea los `.pck` de 100+ MB
+  en cada `plan()` si no cambiaron (compara size+mtime). Mucho mas rapido abrir la pestaña Sync.
+- **Cancelacion** de la sincronizacion (boton Cancelar), incluso a mitad de una descarga grande;
+  no instala nada y deja los `.part` para reanudar.
+- **Progreso detallado:** archivo actual, MB bajados/total, velocidad y ETA; repaint throttled.
+- **Onboarding:** explicacion colapsable de BaseLib / ModListSorter / orden de carga (multiplayer).
+- **Lista de Mods:** toggle "habilitados primero" + boton "habilitar dependencias ya instaladas".
+- **Sets guardados:** nombre legible (en vez de la URL cruda) + "Buscar actualizaciones" que marca
+  los que tienen una version mas nueva publicada.
+- **Toasts:** los avisos de exito se descartan solos; los errores quedan con un hint accionable.
+
 ## [0.2.6] - 2026-06-14 — Distribuible y diagnosticable (fase 0.6)
 
 - **Auto-update RECUPERABLE:** respalda el exe viejo (`.bak`), verifica que el nuevo arranca

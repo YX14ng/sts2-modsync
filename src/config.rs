@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Version del esquema de la config local (subir si cambia de forma incompatible).
@@ -24,6 +25,9 @@ pub struct Config {
     /// URLs de manifiestos de set a los que el usuario esta suscripto.
     #[serde(default)]
     pub subscribed_sets: Vec<String>,
+    /// Ultima version sincronizada por set (url -> set_version), para marcar "version nueva".
+    #[serde(default)]
+    pub set_versions: HashMap<String, String>,
 }
 
 fn default_schema() -> u32 {
@@ -36,7 +40,33 @@ impl Default for Config {
             schema: CONFIG_SCHEMA,
             install_root: None,
             subscribed_sets: Vec::new(),
+            set_versions: HashMap::new(),
         }
+    }
+}
+
+/// Nombre legible para un set suscripto (la config guarda solo la URL). Para una URL de GitHub
+/// Release `.../USER/REPO/releases/download/TAG/...` devuelve "USER/REPO (TAG)"; si no matchea,
+/// usa los ultimos dos segmentos de la ruta. Para mostrar en vez de la URL cruda.
+pub fn set_label(url: &str) -> String {
+    let trimmed = url.split(['?', '#']).next().unwrap_or(url);
+    let segs: Vec<&str> = trimmed
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(pos) = segs.iter().position(|s| *s == "releases")
+        && pos >= 2
+        && segs.get(pos + 1) == Some(&"download")
+        && let Some(tag) = segs.get(pos + 2)
+    {
+        return format!("{}/{} ({})", segs[pos - 2], segs[pos - 1], tag);
+    }
+    let n = segs.len();
+    if n >= 2 {
+        format!("{}/{}", segs[n - 2], segs[n - 1])
+    } else {
+        url.to_string()
     }
 }
 
@@ -127,14 +157,33 @@ mod tests {
 
     #[test]
     fn config_round_trip_toml() {
+        let mut set_versions = HashMap::new();
+        set_versions.insert("https://a/b.json".to_string(), "1.2.3".to_string());
         let cfg = Config {
             schema: CONFIG_SCHEMA,
             install_root: Some(PathBuf::from("/tmp/StS2")),
             subscribed_sets: vec!["https://a/b.json".into()],
+            set_versions,
         };
         let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
         assert_eq!(back.install_root, cfg.install_root);
         assert_eq!(back.subscribed_sets, cfg.subscribed_sets);
+        assert_eq!(back.set_versions, cfg.set_versions);
         assert_eq!(back.schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn set_label_github_y_fallback() {
+        assert_eq!(
+            set_label(
+                "https://github.com/YX14ng/sts2-mods/releases/download/2026.06.14/set-manifest.json"
+            ),
+            "YX14ng/sts2-mods (2026.06.14)"
+        );
+        // no-GitHub: ultimos dos segmentos.
+        assert_eq!(
+            set_label("https://example.com/miset/set-manifest.json"),
+            "miset/set-manifest.json"
+        );
     }
 }

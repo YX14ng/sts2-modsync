@@ -220,7 +220,7 @@ impl TorrentSession {
 
     /// Se une al swarm y baja SOLO los `entries` pedidos. Best-effort: si no hay seeder
     /// (sin bytes tras `SWARM_WAIT`) o algo falla, marca `dead` y vuelve Ok (fetch -> HTTP).
-    fn download(&self, entries: &[FileEntry], on_bytes: &mut dyn FnMut(u64)) -> Result<()> {
+    fn download(&self, entries: &[FileEntry], on_bytes: &mut dyn FnMut(u64) -> bool) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -271,12 +271,19 @@ impl TorrentSession {
             let mut last: u64 = 0;
             let mut last_change = Instant::now();
             loop {
+                // Chequear cancelacion CADA vuelta (no solo cuando avanzan bytes): asi el boton
+                // Cancelar responde aunque el swarm este stalleado. delta 0 no infla la barra.
+                if !on_bytes(0) {
+                    anyhow::bail!("descarga P2P cancelada");
+                }
                 let st = handle.stats();
                 if let Some(err) = st.error {
                     anyhow::bail!("torrent en error: {err}");
                 }
                 if st.progress_bytes > last {
-                    on_bytes(st.progress_bytes - last);
+                    if !on_bytes(st.progress_bytes - last) {
+                        anyhow::bail!("descarga P2P cancelada");
+                    }
                     last = st.progress_bytes;
                     last_change = Instant::now();
                 }
@@ -332,7 +339,7 @@ impl HybridSource {
 }
 
 impl ModSource for HybridSource {
-    fn prepare(&self, entries: &[FileEntry], on_bytes: &mut dyn FnMut(u64)) -> Result<()> {
+    fn prepare(&self, entries: &[FileEntry], on_bytes: &mut dyn FnMut(u64) -> bool) -> Result<()> {
         if let Some(ts) = &self.torrent
             && !ts.dead.get()
         {
@@ -347,7 +354,7 @@ impl ModSource for HybridSource {
         base_url: &str,
         entry: &FileEntry,
         dest: &Path,
-        on_bytes: &mut dyn FnMut(u64),
+        on_bytes: &mut dyn FnMut(u64) -> bool,
     ) -> Result<()> {
         // Si el torrent bajo este archivo, copiarlo (bytes ya contados en `prepare` => 0 aca).
         if let Some(ts) = &self.torrent
@@ -482,8 +489,16 @@ mod tests {
             source.has_p2p(),
             "el manifest tiene magnet -> debe haber P2P"
         );
-        crate::sync::apply(&plan, &manifest, &mods_dir, &source, &mut |_| {})
-            .expect("apply via P2P deberia funcionar");
+        crate::sync::apply(
+            &plan,
+            &manifest,
+            &mods_dir,
+            &source,
+            &mut |_| {},
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .expect("apply via P2P deberia funcionar");
 
         stop.store(true, Ordering::Relaxed);
         let _ = seeder.join();

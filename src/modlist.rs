@@ -155,6 +155,20 @@ pub fn missing_dependencies(mods: &[InstalledMod]) -> Vec<(String, String)> {
     out
 }
 
+/// Ids de dependencias FALTANTES que estan instaladas pero DESHABILITADAS: se pueden habilitar
+/// con un clic (a diferencia de las que no estan instaladas, que hay que bajar). Deduplicado.
+pub fn enableable_missing_deps(mods: &[InstalledMod]) -> Vec<String> {
+    let present_disabled: BTreeSet<&str> =
+        mods.iter().filter(|m| !m.enabled).map(|m| m.id()).collect();
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for (_, dep) in missing_dependencies(mods) {
+        if present_disabled.contains(dep.as_str()) {
+            out.insert(dep);
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Ids que aparecen mas de una vez (p.ej. la misma carpeta en `mods/` y `mods_disabled/`,
 /// o dos mods declarando el mismo id). Util como warning de conflicto.
 pub fn conflicts(mods: &[InstalledMod]) -> Vec<String> {
@@ -218,6 +232,16 @@ mod tests {
         let missing = missing_dependencies(&mods);
         assert!(missing.contains(&("FGOCore".into(), "BaseLib".into())));
         assert!(missing.contains(&("Solo".into(), "NoExiste".into())));
+    }
+
+    #[test]
+    fn enableable_missing_deps_solo_los_instalados_deshabilitados() {
+        let mods = vec![
+            im("FGOCore", true, &["BaseLib", "NoExiste"]),
+            im("BaseLib", false, &[]), // instalado pero deshabilitado -> habilitable
+        ];
+        // BaseLib se puede habilitar; "NoExiste" no esta instalado -> no aparece.
+        assert_eq!(enableable_missing_deps(&mods), vec!["BaseLib".to_string()]);
     }
 
     #[test]

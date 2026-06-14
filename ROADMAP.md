@@ -39,8 +39,9 @@ y `is_game_running` fragil.
 - [x] Auto-update recuperable (`.bak` del exe viejo + verificar arranque). **(0.2.6)**
 - [x] Logging a archivo en %APPDATA% + panic-hook (el GUI no tiene consola). **(0.2.6)**
 - [x] Config versionada (no perder `install_root`/`subscribed_sets` en silencio). **(0.2.6)**
-- [ ] Cancelacion + progreso detallado en sync/publish/install.
-- [ ] Feedback de UI honesto (`install_note` se renderiza; firma visible/afirmativa).
+- [x] Cancelacion + progreso detallado en sync/install. **(0.2.7)** (la de publish queda pendiente:
+      el hasheo+subida es un one-shot menos critico de cortar.)
+- [x] Feedback de UI honesto (`install_note` se renderiza; firma visible/afirmativa). **(0.2.6/0.2.7)**
 
 ## 3. Roadmap por fases (riesgo y dependencias primero)
 
@@ -84,14 +85,14 @@ y `is_game_running` fragil.
 - [x] Config versionada (`schema`): config corrupta se respalda en `.toml.bad`, no se resetea en silencio.
 - [x] CHANGELOG.md + `rel.notes` mostradas antes de actualizar (GUI colapsable + CLI).
 
-### 0.7 -> 1.0 — Pulido de producto (UX) · effort medio-alto
-- Cancelacion de sync/publish/install + limpieza al cancelar.
-- Progreso detallado (archivo actual + velocidad/ETA) + throttle del repaint.
-- Arreglar `install_note` + onboarding (explicar BaseLib/ModListSorter/orden de carga).
-- Toasts por-pestana con auto-dismiss + errores accionables.
-- Lista de Mods con ordenamiento/filtros + boton "habilitar dependencias faltantes".
-- Sets suscritos con nombre legible + indicador "version nueva disponible".
-- Cache de hashes (path -> size+mtime+blake3) para no re-hashear GB.
+### 0.7 -> 1.0 — Pulido de producto (UX) · effort medio-alto · **HECHA (0.2.7)**
+- [x] Cancelacion de sync/install + limpieza al cancelar (la de publish queda pendiente).
+- [x] Progreso detallado (archivo actual + velocidad/ETA) + throttle del repaint.
+- [x] Arreglar `install_note` (ya se renderizaba) + onboarding (BaseLib/ModListSorter/orden de carga).
+- [x] Toasts con auto-dismiss (exitos) + errores accionables (hint + boton cerrar).
+- [x] Lista de Mods con orden ("habilitados primero") / filtro + boton "habilitar deps ya instaladas".
+- [x] Sets suscritos con nombre legible + indicador "version nueva disponible" (chequeo manual).
+- [x] Cache de hashes (path -> size+mtime+blake3) para no re-hashear GB.
 
 ## 4. Top 5 a atacar YA
 1. `ci.yml` + gate en release.yml — la red de seguridad.

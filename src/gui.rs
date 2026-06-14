@@ -86,6 +86,54 @@ fn nav_item(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
         .clicked()
 }
 
+/// Bytes -> "X.Y MB" (las descargas de mods son escala MB).
+fn human_mb(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+}
+
+/// Velocidad legible (B/s, KB/s, MB/s).
+fn human_speed(bps: f64) -> String {
+    if bps >= 1_048_576.0 {
+        format!("{:.1} MB/s", bps / 1_048_576.0)
+    } else if bps >= 1024.0 {
+        format!("{:.0} KB/s", bps / 1024.0)
+    } else {
+        format!("{:.0} B/s", bps.max(0.0))
+    }
+}
+
+/// Segundos restantes -> "Xm Ys" / "Xs" / "—" si no se puede estimar.
+fn human_eta(secs: f64) -> String {
+    if !secs.is_finite() || secs <= 0.0 {
+        return "—".into();
+    }
+    let s = secs.round() as u64;
+    if s >= 60 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Hint accionable para un mensaje de error (heuristica por palabras clave).
+fn toast_hint(msg: &str) -> &'static str {
+    let m = msg.to_ascii_lowercase();
+    if m.contains("abierto") || m.contains("juego") {
+        "Cerra Slay the Spire 2 y reintenta (lockea sus archivos mientras corre)."
+    } else if m.contains("espacio") {
+        "Libera espacio en disco y reintenta."
+    } else if m.contains("firma") {
+        "El set no esta firmado por el publicador de confianza; no lo instales si no sabes su origen."
+    } else if m.contains("cancel") {
+        "Cancelado; los .part quedan para reanudar cuando quieras."
+    } else if m.contains("http") || m.contains("url") || m.contains("descarg") || m.contains("red")
+    {
+        "Revisa la URL del set y tu conexion a internet."
+    } else {
+        "Reintenta; si persiste, mira el log en %APPDATA%/sts2-modsync/sts2-modsync.log."
+    }
+}
+
 pub fn run() -> eframe::Result {
     // Log + panic-hook a %APPDATA% (el GUI puede no tener consola; un crash debe dejar rastro).
     crate::logging::init("gui");
@@ -147,6 +195,14 @@ enum Tab {
     Publish,
 }
 
+/// Notificacion efimera (toast). Los exitos se auto-descartan a los pocos segundos; los
+/// errores quedan hasta que el usuario los cierra y muestran un hint accionable.
+struct Toast {
+    msg: String,
+    is_error: bool,
+    at: std::time::Instant,
+}
+
 struct App {
     tab: Tab,
     cfg: config::Config,
@@ -159,13 +215,14 @@ struct App {
     mods_loaded: bool,
     scan_job: Option<Receiver<Result<Vec<InstalledMod>, String>>>,
     filter: String,
+    sort_enabled_first: bool, // orden de la lista: habilitados arriba (sino, solo alfabetico)
     selected: Option<String>,
     confirm_uninstall: Option<String>,
 
     // Accion en curso (enable/disable/install/uninstall/aplicar perfil): una a la vez.
     action_job: Option<Receiver<Result<String, String>>>,
     busy: String,
-    toast: Option<(String, bool)>,
+    toast: Option<Toast>,
 
     // Pestaña Sync
     sync: SyncState,
@@ -190,6 +247,10 @@ struct App {
     update_check_job: Option<Receiver<Option<update::Release>>>,
     update_avail: Option<update::Release>,
 
+    // Sets suscritos: chequeo manual de "version nueva" (worker que baja cada manifest).
+    set_check_job: Option<Receiver<std::collections::HashMap<String, String>>>,
+    set_updates: std::collections::HashMap<String, String>, // url -> version remota mas nueva
+
     dark_mode: bool,
 }
 
@@ -205,6 +266,7 @@ impl App {
             mods_loaded: false,
             scan_job: None,
             filter: String::new(),
+            sort_enabled_first: false,
             selected: None,
             confirm_uninstall: None,
             action_job: None,
@@ -224,6 +286,8 @@ impl App {
             update_checked: false,
             update_check_job: None,
             update_avail: None,
+            set_check_job: None,
+            set_updates: std::collections::HashMap::new(),
             dark_mode: true,
         };
         app.try_detect();
@@ -262,6 +326,45 @@ impl App {
             update::apply(&rel)?; // reemplaza + relanza + exit; en exito no retorna
             Ok("actualizado".into())
         });
+    }
+
+    /// Worker: baja el manifest de cada set suscripto y, si su version es MAS NUEVA que la
+    /// ultima sincronizada (`cfg.set_versions`), lo marca como "version nueva disponible".
+    fn check_set_updates(&mut self, ctx: &egui::Context) {
+        let sets = self.cfg.subscribed_sets.clone();
+        let known = self.cfg.set_versions.clone();
+        let (tx, rx) = channel();
+        self.set_check_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let mut updates: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for url in &sets {
+                if let Ok(text) = transport::get_text(url)
+                    && let Ok(m) = SetManifest::from_json_str(&text)
+                    && let Some(cur) = known.get(url)
+                    && update::is_newer(&m.set_version, cur)
+                {
+                    updates.insert(url.clone(), m.set_version.clone());
+                }
+            }
+            let _ = tx.send(updates);
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_set_check(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.set_check_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(updates) => {
+                self.set_updates = updates;
+                self.set_check_job = None;
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint(),
+            Err(TryRecvError::Disconnected) => self.set_check_job = None,
+        }
     }
 
     // --- install (header) ---------------------------------------------------
@@ -315,12 +418,51 @@ impl App {
                 self.game_running = detect::is_game_running();
             }
             Ok(Err(e)) => {
-                self.toast = Some((e, true));
+                self.show_toast(e, true);
                 self.mods_loaded = true;
                 self.scan_job = None;
             }
             Err(TryRecvError::Empty) => ctx.request_repaint(),
             Err(TryRecvError::Disconnected) => self.scan_job = None,
+        }
+    }
+
+    /// Muestra un toast (con timestamp para el auto-dismiss).
+    fn show_toast(&mut self, msg: impl Into<String>, is_error: bool) {
+        self.toast = Some(Toast {
+            msg: msg.into(),
+            is_error,
+            at: std::time::Instant::now(),
+        });
+    }
+
+    /// Renderiza el toast actual: los exitos se auto-descartan a los 4 s; los errores quedan
+    /// con un boton de cierre y un hint accionable. Llamar en cada pestaña que quiera mostrarlo.
+    fn render_toast(&mut self, ui: &mut egui::Ui) {
+        let Some(t) = &self.toast else {
+            return;
+        };
+        if !t.is_error && t.at.elapsed() > std::time::Duration::from_secs(4) {
+            self.toast = None;
+            return;
+        }
+        let (msg, is_error) = (t.msg.clone(), t.is_error);
+        let mut dismiss = false;
+        ui.horizontal(|ui| {
+            ui.colored_label(if is_error { BAD } else { OK }, &msg);
+            if ui.small_button("✕").clicked() {
+                dismiss = true;
+            }
+        });
+        if is_error {
+            ui.label(egui::RichText::new(toast_hint(&msg)).italics().weak());
+        } else {
+            // mantener el repaint para que el auto-dismiss ocurra aunque no haya input.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        if dismiss {
+            self.toast = None;
         }
     }
 
@@ -352,10 +494,10 @@ impl App {
             Ok(res) => {
                 self.action_job = None;
                 self.busy.clear();
-                self.toast = Some(match res {
-                    Ok(m) => (m, false),
-                    Err(e) => (e, true),
-                });
+                match res {
+                    Ok(m) => self.show_toast(m, false),
+                    Err(e) => self.show_toast(e, true),
+                }
                 self.mods_loaded = false; // refrescar lista
             }
             Err(TryRecvError::Empty) => ctx.request_repaint(),
@@ -363,10 +505,7 @@ impl App {
                 self.action_job = None;
                 self.busy.clear();
                 self.mods_loaded = false;
-                self.toast = Some((
-                    "la operacion no se completo (worker terminado)".into(),
-                    true,
-                ));
+                self.show_toast("la operacion no se completo (worker terminado)", true);
             }
         }
     }
@@ -416,6 +555,7 @@ enum SyncScreen {
 
 enum SyncProgress {
     Status(String),
+    File(String), // archivo que se empieza a bajar
     Bytes { done: u64, total: u64 },
     Done(Option<String>), // nota opcional (p.ej. huerfanos que no se pudieron borrar)
     Failed(String),
@@ -424,17 +564,25 @@ enum SyncProgress {
 #[derive(Default)]
 struct ProgressState {
     status: String,
+    file: String, // archivo que se esta bajando ahora
     done: u64,
     total: u64,
     finished: bool,
     error: Option<String>,
+    /// Ultima muestra (bytes, instante) para estimar velocidad/ETA.
+    last_sample: Option<(u64, std::time::Instant)>,
+    /// Velocidad suavizada (bytes/seg).
+    speed_bps: f64,
+    /// True si termino por CANCELACION del usuario (se muestra neutro, no como error rojo).
+    cancelled: bool,
 }
 
 #[derive(Default)]
 struct SyncState {
     screen: SyncScreen,
-    url: String,    // input de URL del set
-    source: String, // etiqueta del set cargado (archivo o URL), vacia = nada cargado
+    url: String,                // input de URL del set
+    source: String,             // etiqueta del set cargado (archivo o URL), vacia = nada cargado
+    loaded_url: Option<String>, // URL DE ORIGEN del set cargado (None si vino de archivo)
     manifest: Option<SetManifest>,
     load_err: Option<String>,
     /// Estado de la verificacion de firma del set cargado (se muestra afirmativo en la UI).
@@ -445,6 +593,8 @@ struct SyncState {
     /// Descarga del set-manifest (+ su `.minisig` opcional) por URL (worker).
     fetch_job: Option<Receiver<FetchResult>>,
     apply_job: Option<Receiver<SyncProgress>>,
+    /// Flag de cancelacion del apply en curso (lo lee el worker; lo setea el boton Cancelar).
+    apply_cancel: Option<Arc<AtomicBool>>,
     prog: ProgressState,
 }
 
@@ -456,6 +606,7 @@ impl eframe::App for App {
         self.poll_plan_job(&ctx);
         self.poll_apply_job(&ctx);
         self.poll_fetch_job(&ctx);
+        self.poll_set_check(&ctx);
         if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
             self.kick_scan(&ctx);
         }
@@ -522,10 +673,10 @@ impl App {
                 if ui.add_enabled(has, egui::Button::new("▶ Jugar")).clicked() {
                     let r = self.install.as_ref().map(launch::launch);
                     if let Some(r) = r {
-                        self.toast = Some(match r {
-                            Ok(()) => ("lanzando el juego...".into(), false),
-                            Err(e) => (format!("{e:#}"), true),
-                        });
+                        match r {
+                            Ok(()) => self.show_toast("lanzando el juego...", false),
+                            Err(e) => self.show_toast(format!("{e:#}"), true),
+                        }
                     }
                 }
                 if ui.button("Elegir carpeta").clicked() {
@@ -619,6 +770,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.label("Buscar:");
             ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(180.0));
+            ui.checkbox(&mut self.sort_enabled_first, "Habilitados primero");
             if ui.button("Instalar carpeta...").clicked() {
                 pick_dir = true;
             }
@@ -642,9 +794,7 @@ impl App {
                 ui.label(self.busy.as_str());
             });
         }
-        if let Some((msg, err)) = &self.toast {
-            ui.colored_label(if *err { BAD } else { OK }, msg);
-        }
+        self.render_toast(ui);
 
         if self.scan_job.is_some() || !self.mods_loaded {
             ui.horizontal(|ui| {
@@ -659,6 +809,27 @@ impl App {
         if !missing.is_empty() {
             let txt: Vec<String> = missing.iter().map(|(m, d)| format!("{m}→{d}")).collect();
             ui.colored_label(BAD, format!("Dependencias faltantes: {}", txt.join(", ")));
+            // Las que ya estan instaladas (deshabilitadas) se habilitan con un clic.
+            let enableable = modlist::enableable_missing_deps(&self.mods);
+            if !enableable.is_empty() {
+                let can = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+                let label = format!(
+                    "Habilitar {} dependencia(s) ya instalada(s)",
+                    enableable.len()
+                );
+                if ui.add_enabled(can, egui::Button::new(label)).clicked()
+                    && let Some(install) = self.install.clone()
+                {
+                    self.run_action(ctx, "habilitando dependencias...".into(), move || {
+                        let mut n = 0;
+                        for id in &enableable {
+                            manager::enable(&install, id)?;
+                            n += 1;
+                        }
+                        Ok(format!("habilitadas {n} dependencia(s)"))
+                    });
+                }
+            }
         }
         let conflicts = modlist::conflicts(&self.mods);
         if !conflicts.is_empty() {
@@ -677,6 +848,7 @@ impl App {
                 "ModListSorter deshabilitado: el orden de carga puede divergir entre amigos (room-hash).",
             );
         }
+        onboarding_load_order(ui);
         ui.separator();
 
         let (n_on, n_off) = self.mods.iter().fold((0, 0), |(on, off), m| {
@@ -689,6 +861,15 @@ impl App {
         let can_act = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
         let filter = self.filter.to_ascii_lowercase();
 
+        // Orden de display: alfabetico (de `scan`) y, si se pidio, habilitados primero (estable).
+        let order: Vec<usize> = {
+            let mut idx: Vec<usize> = (0..self.mods.len()).collect();
+            if self.sort_enabled_first {
+                idx.sort_by_key(|&i| !self.mods[i].enabled);
+            }
+            idx
+        };
+
         let mut toggle: Option<String> = None;
         let mut select: Option<String> = None;
 
@@ -700,7 +881,7 @@ impl App {
                     .max_height(320.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for i in 0..self.mods.len() {
+                        for &i in &order {
                             let m = &self.mods[i];
                             if !filter.is_empty() && !mod_matches(m, &filter) {
                                 continue;
@@ -927,11 +1108,11 @@ impl App {
                 let prof = Profile::from_current(self.new_profile.trim(), &self.mods);
                 match profile::save(&prof) {
                     Ok(()) => {
-                        self.toast = Some((format!("perfil guardado: {}", prof.name), false));
+                        self.show_toast(format!("perfil guardado: {}", prof.name), false);
                         self.new_profile.clear();
                         self.profiles_loaded = false;
                     }
-                    Err(e) => self.toast = Some((format!("{e:#}"), true)),
+                    Err(e) => self.show_toast(format!("{e:#}"), true),
                 }
             }
         });
@@ -974,10 +1155,10 @@ impl App {
         if let Some(name) = delete {
             match profile::delete(&name) {
                 Ok(()) => {
-                    self.toast = Some((format!("perfil borrado: {name}"), false));
+                    self.show_toast(format!("perfil borrado: {name}"), false);
                     self.profiles_loaded = false;
                 }
-                Err(e) => self.toast = Some((format!("{e:#}"), true)),
+                Err(e) => self.show_toast(format!("{e:#}"), true),
             }
         }
     }
@@ -1079,9 +1260,7 @@ impl App {
                 ui.label(self.busy.as_str());
             });
         }
-        if let Some((msg, err)) = &self.toast {
-            ui.colored_label(if *err { BAD } else { OK }, msg);
-        }
+        self.render_toast(ui);
         if let Some(dir) = self.pub_out_dir.clone()
             && ui.button("Abrir carpeta de salida").clicked()
         {
@@ -1226,6 +1405,7 @@ impl App {
         let mut do_open_file = false;
         let mut load_saved: Option<String> = None;
         let mut del_saved: Option<String> = None;
+        let mut check_updates = false;
         let busy_any = self.any_job();
 
         card(ui, "Cargar un set", |ui| {
@@ -1258,9 +1438,23 @@ impl App {
             }
             if !self.cfg.subscribed_sets.is_empty() {
                 ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("Sets guardados (1 clic para re-sincronizar):").weak(),
-                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Sets guardados (1 clic para re-sincronizar):").weak(),
+                    );
+                    if ui
+                        .add_enabled(
+                            self.set_check_job.is_none(),
+                            egui::Button::new("Buscar actualizaciones"),
+                        )
+                        .clicked()
+                    {
+                        check_updates = true;
+                    }
+                    if self.set_check_job.is_some() {
+                        ui.spinner();
+                    }
+                });
                 for s in self.cfg.subscribed_sets.clone() {
                     ui.horizontal(|ui| {
                         if ui
@@ -1272,7 +1466,14 @@ impl App {
                         if ui.small_button("borrar").clicked() {
                             del_saved = Some(s.clone());
                         }
-                        ui.label(egui::RichText::new(&s).weak());
+                        // Nombre legible (URL cruda en el hover).
+                        ui.label(config::set_label(&s)).on_hover_text(&s);
+                        if let Some(v) = self.cfg.set_versions.get(&s) {
+                            ui.label(egui::RichText::new(format!("v{v}")).weak());
+                        }
+                        if let Some(newv) = self.set_updates.get(&s) {
+                            ui.colored_label(ACCENT, format!("● nueva v{newv}"));
+                        }
                     });
                 }
             }
@@ -1283,6 +1484,9 @@ impl App {
         }
         if do_open_file {
             self.open_manifest(ctx);
+        }
+        if check_updates {
+            self.check_set_updates(ctx);
         }
         if let Some(s) = load_saved {
             self.sync.url = s;
@@ -1365,15 +1569,51 @@ impl App {
 
     fn ui_sync_progress(&mut self, ui: &mut egui::Ui) {
         ui.label(self.sync.prog.status.as_str());
-        let frac = if self.sync.prog.total > 0 {
-            self.sync.prog.done as f32 / self.sync.prog.total as f32
-        } else if self.sync.prog.finished && self.sync.prog.error.is_none() {
+        let (done, total, speed, finished) = (
+            self.sync.prog.done,
+            self.sync.prog.total,
+            self.sync.prog.speed_bps,
+            self.sync.prog.finished,
+        );
+        let frac = if total > 0 {
+            done as f32 / total as f32
+        } else if finished && self.sync.prog.error.is_none() {
             1.0
         } else {
             0.0
         };
         ui.add(egui::ProgressBar::new(frac).show_percentage());
-        if let Some(e) = &self.sync.prog.error {
+
+        let running = self.sync.apply_job.is_some();
+        // Detalle (solo mientras corre): archivo actual + bajado/total + velocidad + ETA.
+        if running && !finished {
+            if !self.sync.prog.file.is_empty() {
+                ui.label(egui::RichText::new(format!("Bajando: {}", self.sync.prog.file)).weak());
+            }
+            let remaining = total.saturating_sub(done);
+            let eta = if speed > 0.0 {
+                remaining as f64 / speed
+            } else {
+                f64::INFINITY
+            };
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} / {}   ·   {}   ·   ETA {}",
+                    human_mb(done),
+                    human_mb(total),
+                    human_speed(speed),
+                    human_eta(eta),
+                ))
+                .weak(),
+            );
+        }
+
+        if self.sync.prog.cancelled {
+            ui.colored_label(
+                WARN,
+                "Cancelado. No se instalo nada; los .part quedan para reanudar.",
+            );
+        } else if let Some(e) = self.sync.prog.error.clone() {
             ui.colored_label(BAD, format!("No se completo: {e}"));
             ui.label(
                 egui::RichText::new(
@@ -1382,12 +1622,20 @@ impl App {
                 .italics()
                 .weak(),
             );
-        } else if self.sync.prog.finished {
+        } else if finished {
             ui.colored_label(OK, "Instalacion completa.");
         }
         ui.add_space(10.0);
-        let running = self.sync.apply_job.is_some();
-        if ui
+
+        // Mientras corre: Cancelar. Cuando termino: Volver.
+        if running && !finished {
+            if ui.add(egui::Button::new("Cancelar")).clicked() {
+                if let Some(c) = &self.sync.apply_cancel {
+                    c.store(true, Ordering::Relaxed);
+                }
+                self.sync.prog.status = "Cancelando...".into();
+            }
+        } else if ui
             .add_enabled(!running, egui::Button::new("←  Volver"))
             .clicked()
         {
@@ -1484,6 +1732,9 @@ impl App {
         self.sync.consent = false;
         self.sync.manifest = None;
         self.sync.sig_status = None;
+        // Recordar la URL de ORIGEN solo si vino por URL (no por archivo): la clave del registro
+        // de version en Done. Asi no se graba la version de un set-archivo contra una URL vieja.
+        self.sync.loaded_url = source.starts_with("http").then(|| source.clone());
         self.sync.source = source;
         match crate::signing::verify_with_embedded(text.as_bytes(), signature.as_deref()) {
             Ok(status) => self.sync.sig_status = Some(status),
@@ -1541,6 +1792,8 @@ impl App {
         };
         let (tx, rx) = channel();
         self.sync.apply_job = Some(rx);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.sync.apply_cancel = Some(cancel.clone());
         self.sync.prog = ProgressState {
             status: "Preparando...".into(),
             ..Default::default()
@@ -1548,6 +1801,7 @@ impl App {
         self.sync.screen = SyncScreen::Progress;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            let mut last_paint = std::time::Instant::now();
             let result = (|| -> anyhow::Result<Option<String>> {
                 if detect::is_game_running() {
                     anyhow::bail!("El juego esta ABIERTO — cerralo antes de instalar.");
@@ -1584,8 +1838,17 @@ impl App {
                     source.as_ref(),
                     &mut |done| {
                         let _ = tx.send(SyncProgress::Bytes { done, total });
+                        // throttle: a lo sumo ~10 repaints/seg (no uno por cada chunk de 64 KB).
+                        if last_paint.elapsed() >= std::time::Duration::from_millis(100) {
+                            ctx.request_repaint();
+                            last_paint = std::time::Instant::now();
+                        }
+                    },
+                    &mut |path| {
+                        let _ = tx.send(SyncProgress::File(path.to_string()));
                         ctx.request_repaint();
                     },
+                    &cancel,
                 )?;
                 // No tragar errores: si quedaron huerfanos sin borrar, avisarlo en la pantalla final.
                 let note = (!report.orphans_failed.is_empty()).then(|| {
@@ -1612,19 +1875,43 @@ impl App {
         loop {
             match rx.try_recv() {
                 Ok(SyncProgress::Status(s)) => self.sync.prog.status = s,
+                Ok(SyncProgress::File(f)) => self.sync.prog.file = f,
                 Ok(SyncProgress::Bytes { done, total }) => {
                     self.sync.prog.done = done;
                     self.sync.prog.total = total;
                 }
                 Ok(SyncProgress::Done(note)) => {
                     self.sync.prog.finished = true;
+                    self.sync.prog.done = self.sync.prog.total; // barra al 100%
+                    self.sync.prog.file.clear();
                     self.sync.prog.status = note.unwrap_or_else(|| "Listo".into());
+                    self.sync.apply_cancel = None;
                     self.mods_loaded = false; // el set cambio en disco -> re-escanear la lista
                     self.sync.plan = None; // el plan viejo quedo obsoleto
+                    // Registrar la version sincronizada (alimenta el indicador "version nueva"),
+                    // keyed por la URL DE ORIGEN del set (loaded_url), no por el input box (que
+                    // puede tener una URL vieja si despues se cargo un set de archivo).
+                    if let (Some(version), Some(url)) = (
+                        self.sync.manifest.as_ref().map(|m| m.set_version.clone()),
+                        self.sync.loaded_url.clone(),
+                    ) && self.cfg.subscribed_sets.contains(&url)
+                    {
+                        self.cfg.set_versions.insert(url.clone(), version);
+                        self.set_updates.remove(&url);
+                        let _ = config::save(&self.cfg);
+                    }
                 }
                 Ok(SyncProgress::Failed(e)) => {
                     self.sync.prog.finished = true;
-                    self.sync.prog.error = Some(e);
+                    self.sync.prog.file.clear();
+                    self.sync.apply_cancel = None;
+                    // Distinguir una cancelacion del usuario de un fallo real (no es rojo).
+                    if e.contains("cancelad") {
+                        self.sync.prog.cancelled = true;
+                        self.sync.prog.status = "Cancelado".into();
+                    } else {
+                        self.sync.prog.error = Some(e);
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -1633,12 +1920,55 @@ impl App {
                 }
             }
         }
+        // Estimar velocidad/ETA del progreso (muestreo >=250 ms, EMA suave).
+        if !self.sync.prog.finished {
+            let now = std::time::Instant::now();
+            match self.sync.prog.last_sample {
+                Some((b, t)) => {
+                    let dt = now.duration_since(t).as_secs_f64();
+                    if dt >= 0.25 {
+                        let inst = self.sync.prog.done.saturating_sub(b) as f64 / dt;
+                        self.sync.prog.speed_bps = if self.sync.prog.speed_bps <= 0.0 {
+                            inst
+                        } else {
+                            0.7 * self.sync.prog.speed_bps + 0.3 * inst
+                        };
+                        self.sync.prog.last_sample = Some((self.sync.prog.done, now));
+                    }
+                }
+                None => self.sync.prog.last_sample = Some((self.sync.prog.done, now)),
+            }
+        }
         if closed {
             self.sync.apply_job = None;
         } else {
-            ctx.request_repaint();
+            // Heartbeat throttled (~7/seg): mantiene vivo el loop y la velocidad/ETA al dia.
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
     }
+}
+
+/// Explicacion (colapsable) de BaseLib / ModListSorter / orden de carga para no-tecnicos.
+/// Onboarding: aparece donde se muestra el orden de carga (multiplayer).
+fn onboarding_load_order(ui: &mut egui::Ui) {
+    ui.collapsing("¿Que es el orden de carga? (multiplayer)", |ui| {
+        ui.label(
+            egui::RichText::new(
+                "En multiplayer el juego calcula un 'room-hash' a partir del ORDEN en que carga \
+                 los mods. Si vos y un amigo cargan en distinto orden, el hash difiere y NO entran \
+                 al mismo lobby.",
+            )
+            .weak(),
+        );
+        ui.label(
+            egui::RichText::new(
+                "BaseLib es la libreria base (carga primero). ModListSorter fuerza el orden \
+                 canonico (BaseLib + A-Z) al cerrar el juego, asi todos convergen al mismo. Por \
+                 eso un set para jugar juntos DEBE incluir ambos.",
+            )
+            .weak(),
+        );
+    });
 }
 
 fn render_plan(ui: &mut egui::Ui, plan: &sync::Plan) {
@@ -1657,6 +1987,7 @@ fn render_plan(ui: &mut egui::Ui, plan: &sync::Plan) {
             "Falta ModListSorter en el set: los amigos pueden quedar con otro orden (room-hash).",
         );
         }
+        onboarding_load_order(ui);
         ui.label(format!(
             "A descargar: {} archivos  ({:.1} MB)  ·  al dia: {}",
             plan.to_download.len(),
