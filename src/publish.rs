@@ -169,8 +169,96 @@ pub fn write_out(prep: &Prepared, out_dir: &Path) -> Result<PathBuf> {
     Ok(manifest_path)
 }
 
-/// Comando sugerido para subir todo a un GitHub Release con el `gh` CLI (el tag = set_version,
-/// que debe coincidir con el `<tag>` del `base_url`). Incluye el `.minisig` si se firmo.
+/// Deriva (owner, repo, tag) de un `base_url` de release de GitHub:
+/// `https://github.com/<owner>/<repo>/releases/download/<tag>/`.
+fn parse_github_release(base_url: &str) -> Option<(String, String, String)> {
+    let rest = base_url.trim().strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
+    // owner / repo / releases / download / tag
+    if parts.len() >= 5 && parts[2] == "releases" && parts[3] == "download" {
+        Some((
+            parts[0].to_string(),
+            parts[1].to_string(),
+            parts[4].to_string(),
+        ))
+    } else {
+        None
+    }
+}
+
+fn run_gh(args: &[&str]) -> Result<std::process::Output> {
+    std::process::Command::new("gh")
+        .args(args)
+        .output()
+        .context("no se pudo ejecutar `gh` (¿esta instalado y logueado el GitHub CLI?)")
+}
+
+/// Sube el contenido de `out_dir` (set-manifest.json + .minisig + assets/*) al GitHub Release
+/// derivado de `base_url`, via el `gh` CLI. Devuelve la URL del release.
+pub fn upload(out_dir: &Path, base_url: &str) -> Result<String> {
+    let (owner, repo, tag) = parse_github_release(base_url).context(
+        "el base_url no es una URL de release de GitHub \
+         (https://github.com/<owner>/<repo>/releases/download/<tag>/) — subi a mano",
+    )?;
+    let repo_arg = format!("{owner}/{repo}");
+
+    // 1) Crear el release (si ya existe, gh falla -> se ignora; el release existe).
+    let _ = run_gh(&[
+        "release",
+        "create",
+        &tag,
+        "--repo",
+        &repo_arg,
+        "--title",
+        &tag,
+        "--notes",
+        "Set de mods publicado con sts2-modsync.",
+    ]);
+
+    // 2) Juntar archivos: manifest + firma (si esta) + todos los assets.
+    let mut files: Vec<PathBuf> = vec![out_dir.join("set-manifest.json")];
+    let sig = out_dir.join("set-manifest.json.minisig");
+    if sig.exists() {
+        files.push(sig);
+    }
+    if let Ok(rd) = std::fs::read_dir(out_dir.join("assets")) {
+        for e in rd.flatten() {
+            if e.path().is_file() {
+                files.push(e.path());
+            }
+        }
+    }
+
+    // 3) Subir en lotes (limite de longitud de comando en Windows).
+    for batch in files.chunks(40) {
+        let mut args: Vec<String> = vec![
+            "release".into(),
+            "upload".into(),
+            tag.clone(),
+            "--repo".into(),
+            repo_arg.clone(),
+            "--clobber".into(),
+        ];
+        for f in batch {
+            args.push(f.to_string_lossy().to_string());
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = run_gh(&refs)?;
+        if !out.status.success() {
+            bail!(
+                "gh release upload fallo: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+    }
+
+    Ok(format!(
+        "https://github.com/{owner}/{repo}/releases/tag/{tag}"
+    ))
+}
+
+/// Comando sugerido para subir todo a un GitHub Release con el `gh` CLI (fallback si no se puede
+/// subir automaticamente). El tag = `<tag>` del `base_url`. Incluye el `.minisig` si se firmo.
 pub fn gh_hint(set_version: &str, out_dir: &Path) -> String {
     let sig = if out_dir.join("set-manifest.json.minisig").exists() {
         " set-manifest.json.minisig"

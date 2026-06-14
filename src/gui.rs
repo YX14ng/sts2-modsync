@@ -1042,7 +1042,7 @@ impl App {
             && !self.pub_base_url.trim().is_empty()
             && !ids.is_empty();
         if ui
-            .add_enabled(can, egui::Button::new("Generar..."))
+            .add_enabled(can, egui::Button::new("Publicar (subir al release)"))
             .clicked()
         {
             self.start_publish(ctx, ids);
@@ -1081,20 +1081,18 @@ impl App {
             published_at: String::new(),
             baselib_version: None,
         };
-        let version = params.set_version.clone();
         self.run_action(
             ctx,
-            "publicando (hasheando + copiando)...".into(),
+            "publicando (hasheando + subiendo al release)...".into(),
             move || {
                 let mods = modlist::scan(&install)?;
                 let prep = publish::prepare(&mods, &ids, &params)?;
-                let mpath = publish::write_out(&prep, &out_dir)?;
+                publish::write_out(&prep, &out_dir)?;
+                let url = publish::upload(&out_dir, &params.base_url)?;
                 Ok(format!(
-                    "Generado: {} ({} assets, {:.1} MB). Subir con:  {}",
-                    mpath.display(),
+                    "Publicado: {} assets ({:.1} MB) → {url}",
                     prep.assets.len(),
                     prep.total_bytes() as f64 / 1.0e6,
-                    publish::gh_hint(&version, &out_dir)
                 ))
             },
         );

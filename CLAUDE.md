@@ -20,10 +20,15 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
   GitHub Release (`reqwest` **blocking**, sin tokio), verifica BLAKE3, renombra, manda huerfanos a
   la papelera, aborta si el juego corre. La pestaña Sync del GUI baja/instala de verdad.
 - **Publicar (añadido, modder):** `publish` genera el set-manifest + assets desde tus mods (hashea
-  BLAKE3) y arma todo para subir a un GitHub Release (CLI + pestaña Publicar). Los assets son
-  **content-addressed** (nombre = el blake3): los assets de un Release son PLANOS, asi que el
-  transporte baja por `base_url + blake3`, NO por `entry.path` (que queda solo para instalar local).
+  BLAKE3) y **los SUBE al GitHub Release** via `gh` CLI (`publish::upload` deriva owner/repo/tag del
+  `--base-url` y sube manifest + `.minisig` + assets en lotes; `--no-upload` solo genera local). Sin
+  esa subida el Release queda vacio y la sync por URL daba 404. Los assets son **content-addressed**
+  (nombre = el blake3): los assets de un Release son PLANOS, asi que el transporte baja por
+  `base_url + blake3`, NO por `entry.path` (que queda solo para instalar local).
   **FASE 3:** delta intra-`.pck` (bita), auto-update, HTTP Range/resume. Detalle en HANDOFF.md.
+  **OJO publicar sets vs auto-update:** publica los SETS DE MODS en un repo APARTE del de la app. Si
+  usas el mismo, el filtro `v*` del auto-update (`update::check_latest` lista `/releases` y elige el
+  mayor tag `vX.Y.Z`) evita que un release de mods (tag tipo `2026.06.14`) dispare un update falso.
 
 **Firma minisign (real + ACTIVA, crate `minisign`):** `PUBLISHER_PUBKEY` ya tiene la clave publica
 del publicador → la verificacion es OBLIGATORIA (no es modo dev). La clave SECRETA vive fuera del
@@ -47,7 +52,7 @@ repo: en `%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitH
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort) · `hashing` (blake3)
   · `sync` (`plan()` + `apply()` transaccional) · `signing` (minisign verify) · `transport` (GitHub
   Releases, `reqwest` blocking, **content-addressed por blake3**) · `publish` (genera el
-  set-manifest + assets desde los mods, lado modder).
+  set-manifest + assets desde los mods y los SUBE al Release via `gh`, lado modder).
 - **Front:** `main` (CLI con subcomandos) · `gui` (eframe, pestañas; feature `gui`). `lib.rs` reexporta.
 
 Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod trae para el juego
@@ -58,7 +63,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 
 - GUI (mod manager): `cargo run --features gui --bin sts2-modsync-gui` (pestañas Mods/Sync/Perfiles/Publicar).
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json>` (dry-run)
-  · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>]` (modder)
+  · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>] [--no-upload]`
+    (modder; por default SUBE al Release via `gh`, `--no-upload` solo genera local)
   · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
   · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.

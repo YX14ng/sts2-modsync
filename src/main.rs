@@ -261,9 +261,24 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         prep.total_bytes() as f64 / 1.0e6,
         out_dir.display()
     );
-    println!("\nSubir a un GitHub Release (gh CLI):");
-    println!("  {}", publish::gh_hint(version, out_dir));
-    println!("\nLuego pasale a tus amigos la URL del set-manifest.json (o el archivo).");
+
+    if args.iter().any(|a| a == "--no-upload") {
+        println!("\nSubir a mano a un GitHub Release (gh CLI):");
+        println!("  {}", publish::gh_hint(version, out_dir));
+    } else {
+        println!("\nSubiendo al GitHub Release (gh)...");
+        match publish::upload(out_dir, base_url) {
+            Ok(url) => println!("publicado: {url}"),
+            Err(e) => {
+                eprintln!("[!] no se pudo subir automaticamente: {e:#}");
+                println!("Subi a mano:\n  {}", publish::gh_hint(version, out_dir));
+            }
+        }
+    }
+    println!(
+        "\nPasale a tus amigos esta URL (pestaña Sync):\n  {}set-manifest.json",
+        base_url.trim_end_matches('/').to_string() + "/"
+    );
     Ok(())
 }
 

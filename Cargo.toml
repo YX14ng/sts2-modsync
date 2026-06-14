@@ -1,6 +1,6 @@
 [package]
 name = "sts2-modsync"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
 default-run = "sts2-modsync"

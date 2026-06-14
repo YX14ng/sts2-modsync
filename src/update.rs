@@ -39,24 +39,48 @@ fn client() -> Result<reqwest::blocking::Client> {
 /// Consulta el ultimo release. `Ok(None)` si todavia no hay releases (404). Error solo si
 /// la red o el parseo fallan.
 pub fn check_latest() -> Result<Option<Release>> {
-    let url = format!("https://api.github.com/repos/{OWNER}/{REPO}/releases/latest");
+    // Listamos los releases (NO `/latest`) y elegimos el de mayor tag `vX.Y.Z`. Asi los releases
+    // de SETS DE MODS (tags tipo `2026.06.14`) que el usuario publique en el MISMO repo NO se
+    // confunden con una version nueva de la app.
+    let url = format!("https://api.github.com/repos/{OWNER}/{REPO}/releases?per_page=30");
     let resp = client()?
         .get(&url)
         .send()
         .with_context(|| format!("GET {url}"))?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None); // sin releases aun
+        return Ok(None);
     }
     let body = resp.error_for_status().context("github api")?.text()?;
-    let v: serde_json::Value = serde_json::from_str(&body).context("json invalido")?;
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&body).context("json invalido")?;
 
-    let tag = v
-        .get("tag_name")
-        .and_then(|x| x.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let best = arr
+        .iter()
+        .filter(|r| {
+            !r.get("draft")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter(|r| {
+            r.get("tag_name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| t.starts_with('v'))
+        })
+        .max_by_key(|r| {
+            parse_ver(
+                r.get("tag_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+            )
+        });
+
+    Ok(best.and_then(release_from_json))
+}
+
+/// Construye un `Release` a partir del JSON de un release de la API de GitHub.
+fn release_from_json(v: &serde_json::Value) -> Option<Release> {
+    let tag = v.get("tag_name").and_then(|x| x.as_str())?.to_string();
     if tag.is_empty() {
-        return Ok(None);
+        return None;
     }
     let str_field = |k: &str| {
         v.get(k)
@@ -83,13 +107,13 @@ pub fn check_latest() -> Result<Option<Release>> {
         })
         .unwrap_or_default();
 
-    Ok(Some(Release {
+    Some(Release {
         version: tag.trim_start_matches('v').to_string(),
         tag,
         notes: str_field("body"),
         html_url: str_field("html_url"),
         zip_url,
-    }))
+    })
 }
 
 /// `Some(release)` si hay una version MAYOR a la actual; `None` si estas al dia o si algo
