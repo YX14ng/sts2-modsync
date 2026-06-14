@@ -18,11 +18,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Toolchain Rust (MSVC)
+      - name: Toolchain Rust (MSVC) + fmt/clippy
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache de cargo
         uses: Swatinem/rust-cache@v2
+
+      # GATE: no se publica nada si fmt/clippy/test no pasan (evita auto-distribuir regresiones).
+      - name: Verificacion (gate)
+        run: |
+          cargo fmt --all --check
+          cargo clippy --all-targets --features gui -- -D warnings
+          cargo test --features p2p
 
       - name: Build release (CLI + GUI)
         run: cargo build --release --features gui --bin sts2-modsync-gui --bin sts2-modsync

@@ -1,0 +1,129 @@
+# Roadmap a 1.0.0 — sts2-modsync
+
+> Plan derivado de una auditoria del codigo en 6 dimensiones (features/UX, robustez, testing,
+> seguridad, distribucion, performance). Convencion del repo: espanol ASCII sin tildes.
+
+## Orden de ejecucion (acordado)
+
+1. **Quick wins / Fase 0.3** (red de seguridad) — se empieza por aca.
+2. **Todo el ROADMAP** (fases 0.4 -> 1.0).
+3. **Features post-1.0** (ver seccion final): single `.exe`, sacar dependencia del `.minisig`,
+   login de GitHub en la app + crear repo publico de mods automatico.
+
+## 1. Donde estamos
+
+0.2.3 **funcionalmente completo pero NO en grado 1.0**: el flujo central (detectar, mod manager,
+sync transaccional firmado, publish, auto-update, P2P) funciona. Lo que falta NO son features, es
+**confianza/estabilidad/UX para no-tecnicos**. Las dimensiones duras (robustez, testing, seguridad,
+distribucion) tienen bloqueantes; "Features y UX" no tiene ninguno.
+
+Agujeros sistemicos: **(a)** no hay CI de test/lint (solo release por tag) -> un tag puede
+auto-distribuir una regresion via auto-update; **(b)** los modulos peligrosos (`manager.rs`,
+`transport.rs`, el `apply` del auto-update que EJECUTA un binario) tienen **cero tests**; **(c)**
+falta LICENSE. Mas dos fallas de integridad: rename no atomico ante fallo parcial en `sync::apply`
+y `is_game_running` fragil.
+
+## 2. Criterios de 1.0.0 (Definition of Done)
+
+- [ ] CI en push/PR: `fmt --check` + `clippy -D warnings` + `cargo test` + `build --features gui`,
+      y el mismo gate ANTES de `gh release create`.
+- [ ] `manager.rs` con tests (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip).
+- [ ] Auto-update con tests (`extract_named`, `release_from_json`, filtro de tags `v*`).
+- [ ] `transport.rs` con tests (mock loopback: Range 206/200, tamano final, `join_url`).
+- [ ] `sync::apply` realmente transaccional (rename con backup+rollback).
+- [ ] `is_game_running` robusto (nunca mutar `mods/` con el juego abierto).
+- [ ] Errores nunca tragados (huerfanos no borrados se reportan; hash-mismatch reintenta).
+- [ ] Seguridad enforced en codigo (`http://` rechazado; zip-slip del install local cerrado).
+- [ ] LICENSE + `license=` en Cargo.toml + README de usuario final (aviso SmartScreen).
+- [ ] Auto-update recuperable (`.bak` del exe viejo + verificar arranque).
+- [ ] Logging a archivo en %APPDATA% + panic-hook (el GUI no tiene consola).
+- [ ] Config versionada (no perder `install_root`/`subscribed_sets` en silencio).
+- [ ] Cancelacion + progreso detallado en sync/publish/install.
+- [ ] Feedback de UI honesto (`install_note` se renderiza; firma visible/afirmativa).
+
+## 3. Roadmap por fases (riesgo y dependencias primero)
+
+### 0.3 — Red de seguridad (CI + tests de modulos peligrosos) · effort medio
+- `ci.yml` en push/PR: fmt + clippy `-D warnings` + test + build gui. **(bloqueante, bajo)**
+- Mismo gate en `release.yml` antes de `gh release create`.
+- `tempfile` dev-dep -> temp-dirs hermeticos (sync/modlist/publish/torrent tests).
+- Tests `manager.rs` (enable/disable, uninstall, `install_from_zip`, `safe_id`, zip-slip). **(bloqueante)**
+- Tests auto-update (`extract_named`, `release_from_json`, filtro `v*`). **(bloqueante)**
+- Tests `transport.rs` con mock loopback; correr el loopback P2P (hoy `#[ignore]`) en un job.
+- `rust-toolchain.toml` (builds reproducibles).
+
+### 0.4 — Integridad transaccional · effort medio
+- Rename transaccional con backup+rollback ante fallo parcial. **(BLOQUEANTE)**
+- Endurecer `is_game_running`. **(BLOQUEANTE)**
+- No tragar errores (huerfanos no borrados; reintento ante hash-mismatch).
+- Gestion de `.part` (excluir de huerfanos, barrer stale, limpiar staging P2P).
+- Casos borde Windows (long-paths >260, zip-slip en copy/extract, pre-check de disco).
+- Resume Range que re-baja de cero si el `.part` quedo corrupto.
+
+### 0.5 — Seguridad de la cadena · effort medio
+- HTTPS enforced (rechazar `http://`). **(importante, bajo)**
+- Cerrar zip-slip del install local desde `.zip` (`manager.rs`, no pasa por `validate_paths`).
+- `cargo-audit`/`cargo-deny` en CI (superficie de librqbit/tokio).
+- Verificacion de firma VISIBLE y afirmativa en la UI ("firmado por X, verificado OK").
+- `SECURITY.md` + tests negativos de seguridad.
+
+### 0.6 — Distribuible y diagnosticable · effort bajo-medio
+- LICENSE (MIT/Apache-2.0) + campo `license`. **(BLOQUEANTE legal, bajo)**
+- README usuario final (link al release, single-exe, aviso SmartScreen). **(BLOQUEANTE, bajo)**
+- Auto-update recuperable (`.bak` + verificar arranque + volver atras).
+- Logging a %APPDATA% + panic-hook.
+- Config versionada (`schema_version`, sin `unwrap_or_default()` silencioso).
+- CHANGELOG.md + mostrar `rel.notes` antes de actualizar.
+
+### 0.7 -> 1.0 — Pulido de producto (UX) · effort medio-alto
+- Cancelacion de sync/publish/install + limpieza al cancelar.
+- Progreso detallado (archivo actual + velocidad/ETA) + throttle del repaint.
+- Arreglar `install_note` + onboarding (explicar BaseLib/ModListSorter/orden de carga).
+- Toasts por-pestana con auto-dismiss + errores accionables.
+- Lista de Mods con ordenamiento/filtros + boton "habilitar dependencias faltantes".
+- Sets suscritos con nombre legible + indicador "version nueva disponible".
+- Cache de hashes (path -> size+mtime+blake3) para no re-hashear GB.
+
+## 4. Top 5 a atacar YA
+1. `ci.yml` + gate en release.yml — la red de seguridad.
+2. LICENSE + campo `license` — hoy nadie puede redistribuir el .exe.
+3. Arreglar `install_note` — feedback perdido al elegir carpeta equivocada.
+4. Endurecer `is_game_running` — un falso negativo corrompe el set con el juego abierto.
+5. HTTPS enforced — alinea el codigo con el invariante de seguridad declarado.
+
+## 5. Riesgos / decisiones del dueno
+- **Code-signing Authenticode (pago)**: sin esto SmartScreen marca "editor desconocido". Documentar
+  para 1.0, evaluar pagar despues.
+- **Rotacion de clave minisign**: hoy una sola pubkey hardcodeada; documentar procedimiento.
+- **Modelo de confianza (TOFU)**: pubkey global unica -> no escala a "mi amigo tambien publica".
+- **Peso del binario con P2P**: GUI ~9.5 MB con librqbit+tokio activos aun para HTTP-only.
+- **Soporte pirata** (documentar o implicito) y **telemetria/crash opt-in**.
+
+## 6. Fuera de alcance de 1.0
+Delta intra-`.pck` (bita/zstd), descargas concurrentes, evitar la copia staging->.part del P2P,
+i18n (ingles/chino), pestana de Settings dedicada, fuzzing de `validate_paths`/`safe_id`, defensa
+de downgrade en sync.
+
+---
+
+## 7. Post-1.0 (features pedidos, DESPUES de cerrar 1.0)
+
+En este orden, una vez completado todo lo anterior:
+
+1. **Un solo `.exe` para ejecutar.** Unificar en un unico binario portable (hoy se compilan dos:
+   `sts2-modsync-gui.exe` + `sts2-modsync.exe`). Objetivo: el usuario baja un solo archivo y lo
+   corre, sin CLI aparte ni dependencias externas (hoy `publish` depende del `gh` CLI — ver feature 3).
+
+2. **Sacar la dependencia del `.minisig`.**
+   > **OJO (decision de seguridad):** la firma minisign es el invariante P0 — es lo que hace seguro
+   > bajar DLLs que el juego EJECUTA, sobre todo por P2P (peers no confiables). Sacarla a secas
+   > REMUEVE esa garantia. Solo tiene sentido si se reemplaza el ancla de confianza, p.ej. con el
+   > feature 3 (login GitHub): el manifest viene del repo AUTENTICADO del publicador via HTTPS, y el
+   > content-addressing por BLAKE3 garantiza integridad. Hay que decidir el modelo nuevo antes de
+   > implementar (que pasa con P2P, donde el peer no es GitHub). A discutir al llegar aca.
+
+3. **Login de GitHub en la app + crear repo publico de mods automatico.** OAuth device-flow desde
+   la app (es desktop), guardar el token de forma segura, y via la API de GitHub crear el repo
+   publico de sets, crear releases y subir assets DIRECTAMENTE (sin `gh` CLI, sin que el usuario
+   toque nada). Esto reemplaza el `gh` de `publish::upload` y la creacion manual del repo, y puede
+   ser el nuevo ancla de confianza del feature 2.

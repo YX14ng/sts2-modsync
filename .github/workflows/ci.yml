@@ -1,0 +1,42 @@
+name: ci
+
+# Red de seguridad: corre en cada push a main y en cada PR. Sin esto, un tag podia
+# auto-distribuir una regresion via auto-update. El MISMO gate corre en release.yml
+# ANTES de crear el release (ver ese workflow).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain Rust (MSVC) + fmt/clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache de cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formato
+        run: cargo fmt --all --check
+
+      - name: Clippy (gui incluye p2p; -D warnings)
+        run: cargo clippy --all-targets --features gui -- -D warnings
+
+      - name: Tests (core + p2p; el loopback P2P es #[ignore])
+        run: cargo test --features p2p
+
+      - name: Build del core/CLI sin features (que el build liviano siga verde)
+        run: cargo check
+
+      - name: Build release-shape (GUI + CLI con gui/p2p)
+        run: cargo build --features gui --bin sts2-modsync-gui --bin sts2-modsync

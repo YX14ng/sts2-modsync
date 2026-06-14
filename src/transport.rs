@@ -131,6 +131,10 @@ impl ModSource for GitHubReleases {
 /// GET de una URL y devuelve el body como texto. Para bajar el `set-manifest.json` desde
 /// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
 pub fn get_text(url: &str) -> Result<String> {
+    // HTTPS obligatorio (defensa en profundidad): el manifest/.minisig no se bajan en claro.
+    if url.trim_start().to_ascii_lowercase().starts_with("http://") {
+        bail!("URL insegura (http://): la sync exige HTTPS — {url}");
+    }
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
         .build()

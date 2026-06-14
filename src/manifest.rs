@@ -111,6 +111,16 @@ impl SetManifest {
                 SCHEMA_VERSION
             );
         }
+        // HTTPS obligatorio: `base_url` baja DLLs que el juego ejecuta; `http://` permite
+        // downgrade/MITM. (Una base local/relativa para tests no empieza con http:// y pasa.)
+        if self
+            .base_url
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("http://")
+        {
+            bail!("base_url usa http:// inseguro — la sync exige HTTPS (usa https://)");
+        }
         self.validate_paths()?;
         self.validate_dependencies()?;
         Ok(())
@@ -308,6 +318,15 @@ mod tests {
     fn validate_paths_acepta_ruta_buena() {
         let m = manifest(vec![mod_with("BaseLib", &[], &["BaseLib/BaseLib.dll"])]);
         assert!(m.validate_paths().is_ok());
+    }
+
+    #[test]
+    fn validate_rechaza_base_url_http_inseguro() {
+        let mut m = manifest(vec![mod_with("BaseLib", &[], &["BaseLib/BaseLib.dll"])]);
+        m.base_url = "http://example/".into();
+        assert!(m.validate().is_err(), "http:// debe rechazarse");
+        m.base_url = "https://example/".into();
+        assert!(m.validate().is_ok(), "https:// debe aceptarse");
     }
 
     #[test]

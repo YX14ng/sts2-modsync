@@ -536,6 +536,12 @@ impl App {
             });
         });
 
+        // Aviso del install (se setea en try_detect/Elegir carpeta): antes se guardaba pero
+        // nunca se renderizaba, asi que el usuario elegia mal la carpeta y no veia nada.
+        if !self.install_note.is_empty() {
+            ui.colored_label(WARN, &self.install_note);
+        }
+
         // Banner de auto-update. No actualizar (self-replace + relaunch) mientras corre
         // CUALQUIER job: hacerlo en medio de un apply corromperia el set.
         if let Some(rel) = self.update_avail.clone() {

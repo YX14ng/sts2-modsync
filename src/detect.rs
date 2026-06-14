@@ -117,8 +117,45 @@ pub fn ensure_mods_dir(install: &Install) -> Result<()> {
 pub fn is_game_running() -> bool {
     use sysinfo::System;
     let sys = System::new_all();
-    let needle = EXE.to_ascii_lowercase();
-    sys.processes()
-        .values()
-        .any(|p| p.name().to_string_lossy().to_ascii_lowercase() == needle)
+    let full = EXE.to_ascii_lowercase();
+    sys.processes().values().any(|p| {
+        name_is_game(&p.name().to_string_lossy())
+            // Fallback: el basename del path del ejecutable (por si el nombre vino raro).
+            || p.exe()
+                .and_then(|e| e.file_name())
+                .map(|f| f.to_string_lossy().to_ascii_lowercase() == full)
+                .unwrap_or(false)
+    })
+}
+
+/// True si `proc_name` corresponde al exe del juego. Tolerante a: mayusculas/minusculas, a que
+/// falte el sufijo `.exe`, y a truncamiento del nombre (sysinfo puede cortarlo en algunas
+/// plataformas). Un falso NEGATIVO seria grave: dejaria mutar `mods/` con el juego abierto.
+fn name_is_game(proc_name: &str) -> bool {
+    let full = EXE.to_ascii_lowercase();
+    let stem = full.strip_suffix(".exe").unwrap_or(&full);
+    let name = proc_name.to_ascii_lowercase();
+    let name_stem = name.strip_suffix(".exe").unwrap_or(&name);
+    name_stem == stem
+        // truncado: "slaythespir..." con >=8 chars que prefijan el nombre real.
+        || (name_stem.len() >= 8 && stem.starts_with(name_stem))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_is_game_es_tolerante() {
+        assert!(name_is_game("SlayTheSpire2.exe")); // exacto
+        assert!(name_is_game("slaythespire2.exe")); // minuscula
+        assert!(name_is_game("SLAYTHESPIRE2.EXE")); // mayuscula
+        assert!(name_is_game("SlayTheSpire2")); // sin .exe
+        assert!(name_is_game("slaythespire")); // truncado (>=8, prefijo)
+        // NO debe matchear:
+        assert!(!name_is_game("notepad.exe"));
+        assert!(!name_is_game("slay")); // prefijo corto (<8) -> evita falsos positivos
+        assert!(!name_is_game("SlayTheSpire3.exe"));
+        assert!(!name_is_game(""));
+    }
 }
