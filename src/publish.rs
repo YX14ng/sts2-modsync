@@ -211,8 +211,36 @@ fn run_gh(args: &[&str]) -> Result<std::process::Output> {
 }
 
 /// Sube el contenido de `out_dir` (set-manifest.json + .minisig + assets/*) al GitHub Release
-/// derivado de `base_url`, via el `gh` CLI. Devuelve la URL del release.
+/// derivado de `base_url`. Si hay un token de GitHub guardado (login en la app), sube por la
+/// **API REST** (sin depender del `gh` CLI); si no, cae al `gh` CLI. Devuelve la URL del release.
 pub fn upload(out_dir: &Path, base_url: &str) -> Result<String> {
+    if let Some(token) = crate::github::load_token() {
+        return upload_via_api(out_dir, base_url, &token);
+    }
+    upload_via_gh(out_dir, base_url)
+}
+
+/// Sube por la API REST de GitHub (token guardado en el llavero). Crea el repo del usuario si
+/// falta, crea/usa el release del tag, y sube con clobber el manifest + firma + torrent + assets.
+fn upload_via_api(out_dir: &Path, base_url: &str, token: &str) -> Result<String> {
+    let (owner, repo, tag) = crate::github::parse_release_base_url(base_url).context(
+        "el base_url no es una URL de release de GitHub \
+         (https://github.com/<owner>/<repo>/releases/download/<tag>/)",
+    )?;
+    let api = crate::github::Api::new(token.to_string());
+    let login = api.whoami().context("validando el token de GitHub")?;
+    // Crear el repo SOLO si va bajo el usuario del token (POST /user/repos crea ahi). Si el owner
+    // es una org u otro usuario, el repo debe existir; el release dara un error claro si no.
+    if owner.eq_ignore_ascii_case(&login) {
+        api.ensure_repo(&repo)
+            .context("creando el repo en GitHub")?;
+    }
+    let files = crate::github::collect_upload_files(out_dir);
+    api.publish_assets(&owner, &repo, &tag, &files, |_, _| {})
+}
+
+/// Sube via el `gh` CLI (fallback si no hay token guardado). Devuelve la URL del release.
+fn upload_via_gh(out_dir: &Path, base_url: &str) -> Result<String> {
     let (owner, repo, tag) = parse_github_release(base_url).context(
         "el base_url no es una URL de release de GitHub \
          (https://github.com/<owner>/<repo>/releases/download/<tag>/) — subi a mano",

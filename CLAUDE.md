@@ -83,6 +83,9 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
     (modder; por default SUBE al Release via `gh`, `--no-upload` solo genera local)
   · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
   · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma)
+  · `github-login <token>` / `github-status` / `github-logout` (token de GitHub guardado SEGURO en el
+    llavero del SO via `keyring`; con login, `publish` sube por la **API REST** sin el `gh` CLI —
+    modulo `github`: PAT o OAuth device-flow si se setea `github::OAUTH_CLIENT_ID`)
   · `seed <out_dir>` (P2P: seedea un set publicado por torrent; bloquea hasta Ctrl-C; necesita
     `--features p2p`. En el GUI: boton "Seedear este set (P2P)" en la pestaña Publicar).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.

@@ -141,8 +141,9 @@ En este orden, una vez completado todo lo anterior:
    > content-addressing por BLAKE3 garantiza integridad. Hay que decidir el modelo nuevo antes de
    > implementar (que pasa con P2P, donde el peer no es GitHub). A discutir al llegar aca.
 
-3. **Login de GitHub en la app + crear repo publico de mods automatico.** OAuth device-flow desde
-   la app (es desktop), guardar el token de forma segura, y via la API de GitHub crear el repo
-   publico de sets, crear releases y subir assets DIRECTAMENTE (sin `gh` CLI, sin que el usuario
-   toque nada). Esto reemplaza el `gh` de `publish::upload` y la creacion manual del repo, y puede
-   ser el nuevo ancla de confianza del feature 2.
+3. **Login de GitHub en la app + crear repo publico de mods automatico.** ✅ **HECHO (1.2.0).**
+   Modulo `github`: login con PAT pegado o OAuth device-flow (con `OAUTH_CLIENT_ID` configurable),
+   token guardado SEGURO en el llavero del SO (`keyring`). `publish` sube por la API REST (crea el
+   repo publico si falta, crea/usa el release, sube con clobber el manifest+firma+torrent+assets) sin
+   el `gh` CLI (fallback a `gh` si no hay login). GUI (pestaña Publicar) + CLI (`github-login/-status/
+   -logout`). Es el nuevo ancla de confianza para el feature 2 (proximo).

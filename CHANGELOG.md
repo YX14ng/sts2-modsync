@@ -3,6 +3,18 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.2.0] - 2026-06-14 — Publicar sin el `gh` CLI (post-1.0 #2)
+
+- **Login de GitHub en la app** (modulo `github`): se puede conectar con un **Personal Access
+  Token** (pegado) o por **OAuth device-flow** (si se configura `github::OAUTH_CLIENT_ID`). El
+  token se guarda SEGURO en el llavero del SO (Credential Manager en Windows) via `keyring`,
+  nunca en texto plano.
+- **`publish` sube por la API REST de GitHub** cuando hay login: crea el repo publico si falta,
+  crea/usa el release del tag, y sube (con clobber) el manifest + firma + torrent + assets — sin
+  depender del `gh` CLI. Sin login, sigue cayendo al `gh` CLI como fallback.
+- GUI: seccion "Conectar con GitHub" en la pestaña Publicar (PAT o device-flow, con estado).
+- CLI: `github-login <token>` / `github-status` / `github-logout`.
+
 ## [1.1.0] - 2026-06-14 — Un solo ejecutable (post-1.0 #1)
 
 - **Single-exe:** ahora hay UN solo binario `sts2-modsync.exe` (antes eran dos:

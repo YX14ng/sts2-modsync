@@ -1,6 +1,6 @@
 [package]
 name = "sts2-modsync"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 license = "MIT"
 description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
@@ -11,9 +11,10 @@ anyhow = "1.0.102"
 blake3 = { version = "1.8.5", features = ["rayon", "mmap"] }
 directories = "6.0.0"
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts"], optional = true }
+keyring = { version = "^3", features = ["windows-native"] }
 librqbit = { version = "8.1.1", optional = true }
 minisign = "0.9.1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 rfd = "0.17.2"
 self-replace = "1.5.0"
 serde = { version = "1.0.228", features = ["derive"] }

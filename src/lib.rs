@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod detect;
+pub mod github;
 pub mod hashing;
 pub mod launch;
 pub mod logging;

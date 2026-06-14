@@ -61,6 +61,9 @@ fn main() -> Result<()> {
     if cmd == "seed" {
         return cmd_seed(&args);
     }
+    if matches!(cmd, "github-login" | "github-logout" | "github-status") {
+        return cmd_github(cmd, &args);
+    }
 
     let cfg = config::load();
     let Some(install) = resolve_install(&cfg) else {
@@ -357,7 +360,12 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         println!("\nSubir a mano a un GitHub Release (gh CLI):");
         println!("  {}", publish::gh_hint(version, out_dir));
     } else {
-        println!("\nSubiendo al GitHub Release (gh)...");
+        let via = if sts2_modsync::github::is_connected() {
+            "API de GitHub (login en la app)"
+        } else {
+            "gh CLI (no hay login; usa `github-login <token>` para subir por API)"
+        };
+        println!("\nSubiendo al GitHub Release via {via}...");
         match publish::upload(out_dir, base_url) {
             Ok(url) => println!("publicado: {url}"),
             Err(e) => {
@@ -371,6 +379,65 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         base_url.trim_end_matches('/').to_string() + "/"
     );
     Ok(())
+}
+
+/// `github-login <token>` / `github-logout` / `github-status`: gestiona el token de GitHub
+/// (guardado SEGURO en el llavero del SO) que usa `publish` para subir por la API sin el `gh` CLI.
+fn cmd_github(cmd: &str, args: &[String]) -> Result<()> {
+    use sts2_modsync::github;
+    match cmd {
+        "github-login" => {
+            // El token NO se toma de argv (quedaria en el historial del shell / process list):
+            // se lee de la env `GITHUB_TOKEN` o, si no, de stdin.
+            let token = read_login_token(args)?;
+            let token = token.trim();
+            if token.is_empty() {
+                bail!("token vacio");
+            }
+            let login = github::Api::new(token.to_string())
+                .whoami()
+                .context("token invalido o sin permiso")?;
+            github::store_token(token)?;
+            println!("conectado a GitHub como {login} (token guardado en el llavero del SO)");
+        }
+        "github-logout" => {
+            github::clear_token()?;
+            println!("desconectado (token borrado del llavero).");
+        }
+        "github-status" => match github::load_token() {
+            Some(t) => match github::Api::new(t).whoami() {
+                Ok(login) => println!("conectado como {login}."),
+                Err(e) => println!("hay un token guardado pero NO valida: {e:#}"),
+            },
+            None => println!("no conectado (usa `github-login <token>`)."),
+        },
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// Lee el token de login SIN que quede en el historial del shell / la lista de procesos:
+/// de la env `GITHUB_TOKEN`, o (con aviso) de un argumento posicional, o de stdin.
+fn read_login_token(args: &[String]) -> Result<String> {
+    if let Ok(t) = std::env::var("GITHUB_TOKEN")
+        && !t.trim().is_empty()
+    {
+        return Ok(t);
+    }
+    if let Some(t) = args.get(1) {
+        eprintln!(
+            "[aviso] pasar el token por argumento queda en el historial del shell; preferi la env GITHUB_TOKEN o stdin."
+        );
+        return Ok(t.clone());
+    }
+    use std::io::Write;
+    eprint!("Pega el token de GitHub y Enter: ");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("leyendo el token de stdin")?;
+    Ok(line)
 }
 
 /// `update`: chequea el ultimo release en GitHub y, si hay una version nueva, se actualiza.
@@ -487,6 +554,11 @@ fn print_help() {
     println!(
         "  seed    <out_dir>     seedea por P2P (torrent) un set publicado (necesita --features p2p)"
     );
+    println!(
+        "  github-login          guarda un token de GitHub en el llavero (lee de GITHUB_TOKEN o stdin); publish sube por API (sin gh)"
+    );
+    println!("  github-status         muestra si estas conectado a GitHub");
+    println!("  github-logout         borra el token guardado");
     println!(
         "\nGUI (mod manager con pestañas): corre el exe SIN argumentos (o `cargo run --features gui`)."
     );
