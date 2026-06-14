@@ -131,6 +131,12 @@ pub fn apply(
         staged.push((part, dest, r));
     }
 
+    // El juego pudo ABRIRSE durante la descarga (lock de .dll/.pck en Windows). Re-chequear
+    // antes de renombrar: si esta abierto, abortar sin tocar nada (los .part quedan para reintentar).
+    if crate::detect::is_game_running() {
+        bail!("el juego se abrio durante la descarga — cerralo y reintenta (no se instalo nada)");
+    }
+
     // 3) Todo verificado -> renombrar (casi atomico, raramente falla) en orden topologico.
     staged.sort_by_key(|&(_, _, r)| r);
     for (part, dest, _) in &staged {

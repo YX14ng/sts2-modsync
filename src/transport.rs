@@ -101,7 +101,7 @@ impl ModSource for GitHubReleases {
             file.write_all(&buf[..n]).context("escribiendo a disco")?;
             on_bytes(n as u64);
         }
-        file.flush().ok();
+        file.flush().context("flush a disco")?;
 
         // Sanity de tamaño (el hash lo chequea apply). Atrapa "asset equivocado/faltante" o
         // un 404 que devolvio HTML, antes de gastar el hash.

@@ -355,8 +355,23 @@ impl App {
                 self.action_job = None;
                 self.busy.clear();
                 self.mods_loaded = false;
+                self.toast = Some((
+                    "la operacion no se completo (worker terminado)".into(),
+                    true,
+                ));
             }
         }
+    }
+
+    /// True si hay CUALQUIER trabajo de fondo en curso (scan, accion, plan, fetch, apply).
+    /// Usado para no disparar acciones destructivas (update, cargar set) en paralelo.
+    fn any_job(&self) -> bool {
+        !self.busy.is_empty()
+            || self.action_job.is_some()
+            || self.scan_job.is_some()
+            || self.sync.plan_job.is_some()
+            || self.sync.fetch_job.is_some()
+            || self.sync.apply_job.is_some()
     }
 
     fn toggle_mod(&mut self, ctx: &egui::Context, id: &str) {
@@ -515,9 +530,10 @@ impl App {
             });
         });
 
-        // Banner de auto-update.
+        // Banner de auto-update. No actualizar (self-replace + relaunch) mientras corre
+        // CUALQUIER job: hacerlo en medio de un apply corromperia el set.
         if let Some(rel) = self.update_avail.clone() {
-            let can = self.busy.is_empty() && self.action_job.is_none();
+            let can = !self.any_job();
             let mut do_update = false;
             ui.horizontal(|ui| {
                 ui.colored_label(ACCENT, format!("● Version nueva {} disponible", rel.tag));
@@ -1104,6 +1120,7 @@ impl App {
         let mut do_open_file = false;
         let mut load_saved: Option<String> = None;
         let mut del_saved: Option<String> = None;
+        let busy_any = self.any_job();
 
         card(ui, "Cargar un set", |ui| {
             ui.horizontal(|ui| {
@@ -1113,14 +1130,17 @@ impl App {
                         .hint_text("https://.../set-manifest.json")
                         .desired_width(360.0),
                 );
-                let can = self.sync.fetch_job.is_none() && !self.sync.url.trim().is_empty();
+                let can = !busy_any && !self.sync.url.trim().is_empty();
                 if ui
                     .add_enabled(can, egui::Button::new("Cargar URL"))
                     .clicked()
                 {
                     do_load_url = true;
                 }
-                if ui.button("Abrir archivo...").clicked() {
+                if ui
+                    .add_enabled(!busy_any, egui::Button::new("Abrir archivo..."))
+                    .clicked()
+                {
                     do_open_file = true;
                 }
             });
@@ -1137,7 +1157,10 @@ impl App {
                 );
                 for s in self.cfg.subscribed_sets.clone() {
                     ui.horizontal(|ui| {
-                        if ui.button("Cargar").clicked() {
+                        if ui
+                            .add_enabled(!busy_any, egui::Button::new("Cargar"))
+                            .clicked()
+                        {
                             load_saved = Some(s.clone());
                         }
                         if ui.small_button("borrar").clicked() {
@@ -1443,6 +1466,8 @@ impl App {
                 Ok(SyncProgress::Done) => {
                     self.sync.prog.finished = true;
                     self.sync.prog.status = "Listo".into();
+                    self.mods_loaded = false; // el set cambio en disco -> re-escanear la lista
+                    self.sync.plan = None; // el plan viejo quedo obsoleto
                 }
                 Ok(SyncProgress::Failed(e)) => {
                     self.sync.prog.finished = true;

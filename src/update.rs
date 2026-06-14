@@ -134,8 +134,10 @@ pub fn apply(rel: &Release) -> Result<()> {
     let tmp_exe = cur.with_extension("new");
     extract_named(&bytes, ASSET_EXE, &tmp_exe)?;
 
-    self_replace::self_replace(&tmp_exe).context("reemplazando el ejecutable")?;
+    // Limpiar el temp pase lo que pase (exito o si self_replace falla).
+    let res = self_replace::self_replace(&tmp_exe).context("reemplazando el ejecutable");
     let _ = std::fs::remove_file(&tmp_exe);
+    res?;
 
     std::process::Command::new(&cur)
         .spawn()
