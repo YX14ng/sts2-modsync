@@ -2,6 +2,7 @@
 
 Guia para Claude Code en este repo. **Antes de tocar codigo, lee [HANDOFF.md](HANDOFF.md)** —
 tiene el research (transporte/costo, stack, deteccion, seguridad) ya hecho y el plan de fases.
+El plan vivo hacia 1.0 (auditoria en 6 dimensiones, Definition of Done) esta en [ROADMAP.md](ROADMAP.md).
 
 ## Que es
 
@@ -83,14 +84,28 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   Test e2e real de P2P (loopback, abre sockets, ignorado por default):
   `cargo test --features p2p p2p_loopback -- --ignored --nocapture --test-threads=1`.
 - Un solo test: `cargo test <nombre>` (o por modulo `cargo test modlist::tests::`); `-- --nocapture`
-  para ver prints. Tests inline en `manifest`/`modlist`/`profile`/`sync`/`publish` (varios crean
-  mods de prueba en un tempdir; `sync::apply` usa un `ModSource` falso, `publish` hace round-trip
-  prepare→plan=noop). NO pegan a la red.
+  para ver prints. Tests inline en casi todos los modulos —incluidos los **peligrosos**
+  (`manager`/`update`/`transport`, red de seguridad de la fase 0.3)— ademas de
+  `manifest`/`modlist`/`profile`/`sync`/`publish`/`signing`/`detect` (varios crean mods de prueba en
+  un tempdir; `sync::apply` usa un `ModSource` falso, `publish` hace round-trip prepare→plan=noop).
+  NO pegan a la red.
 - Agregar deps: `cargo add <crate>` (NO hardcodear patch a ojo — deja que cargo resuelva).
 - Toolchain **MSVC** + VS Build Tools (sin OpenSSL; todo rustls — librqbit usa native-tls=SChannel
   en Windows, NO OpenSSL). El core ya incluye `zip`/`trash` (manager); `eframe` es opcional (feature
   `gui`); `librqbit`+`tokio` son opcionales (feature `p2p`, que `gui` incluye) y engordan el binario
   (por eso van gateados). Release size-optimized (`opt-level="z"`, `lto`, `panic="abort"`).
+
+## CI / release (`.github/workflows/`)
+
+- **`ci.yml`** (push a `main` + cada PR, windows-latest): `cargo fmt --all --check` ·
+  `cargo clippy --all-targets --features gui -- -D warnings` (**un warning ROMPE el build**) ·
+  `cargo test --features p2p` (el loopback P2P es `#[ignore]`, no corre) · `cargo check` (core/CLI
+  sin features, que el build liviano siga verde) · build GUI+CLI. Corré ese mismo set local antes
+  de pushear.
+- **`release.yml`** (push de un tag `v*`): corre el MISMO gate fmt/clippy/test, buildea release,
+  **firma** el `.zip` con `sign` (secret `MINISIGN_SECRET_KEY`, si esta) y crea el GitHub Release
+  (zip + `.minisig`). Lo consume el auto-update. Sacar version: subir `version` en `Cargo.toml`,
+  `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 ## Invariantes que NO romper
 
