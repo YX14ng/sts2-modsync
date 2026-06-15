@@ -14,10 +14,14 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.0.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.4.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
-esta completo. Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue es post-1.0
-(single `.exe`, login de GitHub + repo de mods automatico, sacar dependencia del `.minisig`).
+esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
+GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Y
+1.4.0: la app **recuerda el repo de publicacion** (`config.publish_repo`), asi "actualizar la lista"
+es subir OTRO release al MISMO repo (no recrear repos); el `--repo`/tag se sanean antes de armar el
+`base_url` firmado. Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar):
+crear el repo de mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, delta intra-`.pck`.
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de

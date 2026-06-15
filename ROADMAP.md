@@ -147,3 +147,14 @@ En este orden, una vez completado todo lo anterior:
    repo publico si falta, crea/usa el release, sube con clobber el manifest+firma+torrent+assets) sin
    el `gh` CLI (fallback a `gh` si no hay login). GUI (pestaña Publicar) + CLI (`github-login/-status/
    -logout`). Es el nuevo ancla de confianza para el feature 2 (proximo).
+
+4. **Recordar el repo de publicacion (no recrear repos).** ✅ **HECHO (1.4.0).** La app guarda el
+   ultimo `owner/repo` publicado en `config.publish_repo` (+ el nombre del set): "actualizar la lista
+   de mods" pasa a ser subir OTRO release al MISMO repo, no crear uno nuevo cada vez. GUI: campo
+   "Repositorio" pre-cargado con hint del release destino; CLI: `publish --repo` (o reusa el
+   recordado). `github::normalize_repo`/`valid_tag` sanean owner/repo/tag (charset real, sin
+   `?#`/espacios/`/`/`..`) ANTES de armar el `base_url` que queda FIRMADO en el set-manifest.
+
+**Sin empezar (proximo):** crear el repo de mods con UN click desde la GUI (hoy `ensure_repo` ya lo
+crea al publicar si el owner == login, pero no hay un flujo dedicado), registrar una OAuth App real
+para activar el device-flow (`OAUTH_CLIENT_ID`), y delta intra-`.pck` (fase 3).
