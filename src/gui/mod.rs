@@ -147,6 +147,13 @@ struct App {
     sort_enabled_first: bool, // orden de la lista: habilitados arriba (sino, solo alfabetico)
     selected: Option<String>,
     confirm_uninstall: Option<String>,
+    // Auto-update de mods desde su upstream (GitHub/Nexus). `mod_source_input` = campo para pegar
+    // el origen del mod seleccionado; `mod_updates` = versiones nuevas halladas (id -> update);
+    // `mod_update_job` = worker del chequeo (id, resultado).
+    mod_source_input: String,
+    mod_updates: std::collections::HashMap<String, crate::modupdate::ModUpdate>,
+    #[allow(clippy::type_complexity)]
+    mod_update_job: Option<Receiver<(String, Result<Option<crate::modupdate::ModUpdate>, String>)>>,
 
     // Accion en curso (enable/disable/install/uninstall/aplicar perfil): una a la vez.
     action_job: Option<Receiver<Result<String, String>>>,
@@ -234,6 +241,9 @@ impl App {
             update_avail: None,
             set_check_job: None,
             set_updates: std::collections::HashMap::new(),
+            mod_source_input: String::new(),
+            mod_updates: std::collections::HashMap::new(),
+            mod_update_job: None,
             dark_mode: true,
         };
         app.try_detect();
@@ -406,6 +416,9 @@ impl App {
                     Err(e) => self.show_toast(e, true),
                 }
                 self.mods_loaded = false; // refrescar lista
+                // Una accion (p.ej. mod-update) pudo escribir la config desde el worker
+                // (mod_installed_tag): recargarla. La config en disco siempre == self.cfg salvo eso.
+                self.cfg = config::load();
             }
             Err(TryRecvError::Empty) => ctx.request_repaint(),
             Err(TryRecvError::Disconnected) => {
@@ -436,6 +449,7 @@ impl eframe::App for App {
         self.poll_apply_job(&ctx);
         self.poll_fetch_job(&ctx);
         self.poll_set_check(&ctx);
+        self.poll_mod_update(&ctx);
         self.poll_gh_job(&ctx);
         if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
             self.kick_scan(&ctx);

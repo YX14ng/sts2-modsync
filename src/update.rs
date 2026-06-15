@@ -133,7 +133,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
     parse_ver(latest) > parse_ver(current)
 }
 
-fn parse_ver(s: &str) -> (u64, u64, u64) {
+pub(crate) fn parse_ver(s: &str) -> (u64, u64, u64) {
     let s = s.trim().trim_start_matches('v');
     let core = s.split(['-', '+']).next().unwrap_or(s);
     let mut it = core.split('.').map(|p| p.parse::<u64>().unwrap_or(0));

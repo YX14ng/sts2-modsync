@@ -21,8 +21,8 @@ use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 use sts2_modsync::{
-    config, detect, launch, manager, manifest::SetManifest, modlist, profile, publish, signing,
-    sync, transport, update,
+    config, detect, launch, manager, manifest::SetManifest, modlist, modsource::ModSource,
+    modupdate, profile, publish, signing, sync, transport, update,
 };
 
 fn main() -> Result<()> {
@@ -89,6 +89,9 @@ fn main() -> Result<()> {
             println!("lanzando Slay the Spire 2...");
         }
         "publish" => cmd_publish(&install, &args)?,
+        "mod-source" => cmd_mod_source(&args)?,
+        "mod-check" => cmd_mod_check(&install, &args)?,
+        "mod-update" => cmd_mod_update(&install, &args)?,
         "sync" => cmd_sync(&install, arg(&args, 1)?)?,
         // compat: `sts2-modsync algo.json|http...` == `sync ...` (como el MVP viejo).
         other
@@ -99,7 +102,7 @@ fn main() -> Result<()> {
         }
         other => {
             bail!(
-                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|seed|help)"
+                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|seed|help)"
             )
         }
     }
@@ -458,6 +461,124 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// `mod-source <id> <usuario/repo|URL>`: fija el origen (upstream) de un mod para auto-actualizarlo.
+/// Se recuerda en `config.mod_sources` (prioridad sobre el `<id>.json`).
+fn cmd_mod_source(args: &[String]) -> Result<()> {
+    let id = arg(args, 1)?;
+    let url = arg(args, 2)?;
+    let src = ModSource::parse(url).with_context(|| {
+        format!("origen invalido: {url:?} (usa usuario/repo o una URL de Nexus)")
+    })?;
+    let mut cfg = config::load();
+    cfg.mod_sources.insert(id.to_string(), src.to_storage());
+    config::save(&cfg)?;
+    println!("origen de {id}: {}", src.label());
+    Ok(())
+}
+
+/// Canal de un mod->update legible (estable/beta).
+fn chan_label(prerelease: bool) -> &'static str {
+    if prerelease { "beta" } else { "estable" }
+}
+
+/// `mod-check [<id>]`: chequea si hay version nueva (canal global estable/beta) de los mods con
+/// origen GitHub configurado; con `<id>`, solo ese. Los de Nexus se listan con su pagina (fase 2).
+fn cmd_mod_check(install: &detect::Install, args: &[String]) -> Result<()> {
+    let cfg = config::load();
+    let mods = modlist::scan(install)?;
+    let only = args.get(1).map(String::as_str);
+    let canal = if cfg.prefer_beta { "beta" } else { "estable" };
+    println!("canal: {canal}");
+    let mut found = 0usize;
+    for m in mods.iter().filter(|m| only.is_none_or(|id| m.id() == id)) {
+        let Some(src) = modupdate::effective_source(m, &cfg) else {
+            continue;
+        };
+        match &src {
+            ModSource::GitHub { owner, repo } => {
+                match modupdate::check_github(
+                    owner,
+                    repo,
+                    m.id(),
+                    m.manifest.version.as_deref(),
+                    cfg.mod_installed_tag.get(m.id()).map(String::as_str),
+                    cfg.prefer_beta,
+                ) {
+                    Ok(Some(u)) => {
+                        println!(
+                            "  [{}] v{} -> v{} ({})  {}",
+                            m.id(),
+                            u.current.as_deref().unwrap_or("?"),
+                            u.latest,
+                            chan_label(u.prerelease),
+                            u.html_url
+                        );
+                        found += 1;
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("  [{}] error: {e:#}", m.id()),
+                }
+            }
+            ModSource::Nexus { .. } => {
+                println!(
+                    "  [{}] Nexus ({}) — descarga auto: fase 2; abri {}",
+                    m.id(),
+                    src.label(),
+                    src.web_url()
+                );
+            }
+        }
+    }
+    if found == 0 {
+        println!("(sin actualizaciones, o ningun mod tiene origen GitHub configurado)");
+    }
+    Ok(())
+}
+
+/// `mod-update <id>`: chequea e INSTALA la version nueva del mod (reemplaza, preserva enable/disable).
+fn cmd_mod_update(install: &detect::Install, args: &[String]) -> Result<()> {
+    let id = arg(args, 1)?;
+    let cfg = config::load();
+    let mods = modlist::scan(install)?;
+    let m = mods
+        .iter()
+        .find(|m| m.id() == id)
+        .with_context(|| format!("el mod {id:?} no esta instalado"))?;
+    let src = modupdate::effective_source(m, &cfg).with_context(|| {
+        format!("{id} no tiene origen (usa: mod-source {id} <usuario/repo|URL>)")
+    })?;
+    let ModSource::GitHub { owner, repo } = &src else {
+        bail!(
+            "{id} es de Nexus ({}): la descarga auto es la fase 2; abri {}",
+            src.label(),
+            src.web_url()
+        );
+    };
+    let upd = modupdate::check_github(
+        owner,
+        repo,
+        id,
+        m.manifest.version.as_deref(),
+        cfg.mod_installed_tag.get(id).map(String::as_str),
+        cfg.prefer_beta,
+    )?
+    .with_context(|| {
+        format!(
+            "{id} ya esta en la ultima version ({})",
+            m.manifest.version.as_deref().unwrap_or("?")
+        )
+    })?;
+    println!(
+        "actualizando {id}: v{} -> v{} ({})...",
+        upd.current.as_deref().unwrap_or("?"),
+        upd.latest,
+        chan_label(upd.prerelease)
+    );
+    modupdate::apply(install, id, &upd.asset_url, &upd.tag)?;
+    println!("listo: {id} v{}", upd.latest);
+    Ok(())
+}
+
 /// `github-login <token>` / `github-logout` / `github-status`: gestiona el token de GitHub
 /// (guardado SEGURO en el llavero del SO) que usa `publish` para subir por la API sin el `gh` CLI.
 fn cmd_github(cmd: &str, args: &[String]) -> Result<()> {
@@ -637,6 +758,11 @@ fn print_help() {
     println!(
         "                        (la proxima vez podes omitirlo: sube OTRO release al mismo repo)"
     );
+    println!(
+        "  mod-source <id> <usuario/repo|URL>   fija el origen de un mod (GitHub/Nexus) para auto-update"
+    );
+    println!("  mod-check [<id>]      busca version nueva de los mods (canal global estable/beta)");
+    println!("  mod-update <id>       baja e instala la version nueva de un mod (origen GitHub)");
     println!("  update                chequea GitHub y actualiza la app si hay version nueva");
     println!("  keygen                genera el par de claves minisign del modder (firma sets)");
     println!(

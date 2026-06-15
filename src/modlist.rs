@@ -37,12 +37,30 @@ pub struct ModManifest {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub affects_gameplay: bool,
+    /// Origen del mod (repo de GitHub o pagina de Nexus), si el modder lo declara en el `<id>.json`.
+    /// Se prueban en orden; el primero que parsee a un `ModSource` gana. Opcional (pocos lo traen
+    /// hoy): si falta, el usuario lo pega a mano y se recuerda en `config.mod_sources`.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub repository: Option<String>,
 }
 
 impl ModManifest {
     /// Nombre legible (cae al id si el manifiesto no trae `name`).
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Origen declarado en el `<id>.json` (si alguno de `repository`/`url`/`homepage` parsea a un
+    /// `ModSource`). El override del usuario en `config.mod_sources` tiene prioridad sobre esto.
+    pub fn source_hint(&self) -> Option<crate::modsource::ModSource> {
+        [&self.repository, &self.url, &self.homepage]
+            .into_iter()
+            .flatten()
+            .find_map(|s| crate::modsource::ModSource::parse(s))
     }
 }
 
@@ -215,6 +233,9 @@ mod tests {
                 has_pck: false,
                 dependencies: deps.iter().map(|s| s.to_string()).collect(),
                 affects_gameplay: false,
+                url: None,
+                homepage: None,
+                repository: None,
             },
             dir: PathBuf::from(id),
             enabled,

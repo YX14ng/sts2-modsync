@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.6.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.7.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -29,9 +29,16 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   patches contra la publicacion anterior en `--out`; `sync` elige el patch si el archivo viejo local
   matchea un `delta.from_blake3` y verifica el BLAKE3 del resultado (si falla, cae al full). Seguro
   por construccion: el delta es pura optimizacion, nunca puede instalar bytes equivocados.
+- **1.7.0 (fase 1):** **auto-update de MODS desde su upstream.** `modsource::ModSource` (GitHub o
+  Nexus) sale del `<id>.json` (`repository`/`url`/`homepage`) o lo pega el usuario (`config.mod_sources`,
+  prioridad). `modupdate::check_github` lista `/releases` y elige por canal GLOBAL (`config.prefer_beta`:
+  beta = pre-releases, estable = MAIN) — el mapeo BETA/MAIN es limpio en GitHub. `modupdate::apply` baja
+  el asset `.zip` e instala con `manager::install_from_zip(overwrite)` preservando enable/disable. GitHub
+  = auto completo; **Nexus = solo chequeo/abrir (fase 2: handler `nxm://`, sin empezar).**
 
-Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): crear el repo de
-mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
+Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): **fase 2 del
+auto-update de mods** (API de Nexus + handler `nxm://`), crear el repo de mods automatico con un
+click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
@@ -69,8 +76,11 @@ mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/t
 
 - **Core:** `detect` (Steam/pirata + juego-abierto) · `config` (%APPDATA%).
 - **Mod manager:** `modlist` (escanea `mods/`+`mods_disabled/`, parsea `<id>.json`, deps/conflictos,
-  orden de carga) · `manager` (enable/disable/install/uninstall = **MOVER carpetas**, juego cerrado)
-  · `profile` (perfiles = conjuntos habilitados; puente con set-manifest) · `launch` (abrir el juego).
+  orden de carga; `ModManifest.source_hint()` lee el upstream del mod) · `manager` (enable/disable/
+  install/uninstall = **MOVER carpetas**, juego cerrado) · `profile` (perfiles = conjuntos habilitados)
+  · `launch` (abrir el juego) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
+  `modupdate` (auto-update de un mod desde su upstream: `check_github` por canal + `apply` baja+instala;
+  Nexus es fase 2).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
   delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
@@ -106,6 +116,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   `sts2-modsync` abre la GUI si no hay subcomandos). Pestañas Mods/Sync/Perfiles/Publicar.
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json|url|owner/repo>`
   (dry-run; con `owner/repo` —o `repo:owner/repo`— sigue el ULTIMO release via `/releases/latest`)
+  · `mod-source <id> <usuario/repo|URL>` (fija el origen de un mod) · `mod-check [<id>]` (busca version
+    nueva por canal global) · `mod-update <id>` (baja+instala la nueva, origen GitHub)
   · `publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>] [--no-upload] [--no-delta]`
     (modder; por default SUBE al Release. El **`--repo` se RECUERDA** en `config.publish_repo`: la
     proxima vez podes omitirlo y publica OTRO release en el MISMO repo —el GUI deriva el `base_url`

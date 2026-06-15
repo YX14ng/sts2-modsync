@@ -54,10 +54,9 @@ pub struct GitHubReleases {
 
 impl GitHubReleases {
     pub fn new() -> Self {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("construir cliente reqwest");
+        // Reusa `http_client()` para heredar la redirect-policy https-only (un 30x del asset hacia
+        // http:// se rechaza tambien aca, no solo en el auto-update de mods).
+        let client = http_client().unwrap_or_else(|_| reqwest::blocking::Client::new());
         Self { client }
     }
 }
@@ -137,6 +136,26 @@ impl ModSource for GitHubReleases {
         }
         Ok(())
     }
+}
+
+/// Cliente HTTP blocking con el User-Agent de la app. Punto unico para construir el cliente que
+/// usan los chequeos/descargas. La redirect-policy EXIGE https en CADA hop (rechaza un 30x que
+/// degrade a `http://`): `require_https` valida solo la URL inicial, no el destino tras redirects.
+pub fn http_client() -> Result<reqwest::blocking::Client> {
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            attempt.error("demasiados redirects")
+        } else if attempt.url().scheme() != "https" {
+            attempt.error("redirect inseguro a una URL no-https")
+        } else {
+            attempt.follow()
+        }
+    });
+    reqwest::blocking::Client::builder()
+        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
+        .redirect(policy)
+        .build()
+        .context("construir cliente http")
 }
 
 /// Resuelve la URL del `set-manifest.json` del **ULTIMO release** de un repo PUBLICO de GitHub.

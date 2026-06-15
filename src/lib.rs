@@ -15,6 +15,8 @@ pub mod logging;
 pub mod manager;
 pub mod manifest;
 pub mod modlist;
+pub mod modsource;
+pub mod modupdate;
 pub mod profile;
 pub mod publish;
 pub mod signing;

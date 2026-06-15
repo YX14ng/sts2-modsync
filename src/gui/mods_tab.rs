@@ -2,9 +2,11 @@
 //! de carga), detalle del mod seleccionado y las acciones enable/disable/install/uninstall.
 
 use super::widgets::{card, human_size, mod_matches, onboarding_load_order};
-use super::{App, BAD, WARN};
+use super::{ACCENT, App, BAD, WARN};
+use crate::modsource::ModSource;
 use crate::{manager, modlist};
 use eframe::egui;
+use std::sync::mpsc::{TryRecvError, channel};
 
 impl App {
     pub(super) fn ui_mods(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -27,6 +29,16 @@ impl App {
             }
             if ui.button("Re-escanear").clicked() {
                 self.mods_loaded = false;
+            }
+            // Canal GLOBAL de actualizacion de mods (estable vs beta/pre-releases).
+            ui.separator();
+            if ui
+                .checkbox(&mut self.cfg.prefer_beta, "Canal beta")
+                .on_hover_text("Seguir versiones BETA (pre-releases) al actualizar mods. Sin tildar: solo estables (MAIN).")
+                .changed()
+            {
+                let _ = crate::config::save(&self.cfg);
+                self.mod_updates.clear(); // el canal cambio: invalidar lo encontrado
             }
         });
         if pick_dir {
@@ -163,6 +175,11 @@ impl App {
         );
 
         if let Some(id) = select {
+            // Cambio de mod -> limpiar el campo de origen (es uno solo, compartido): asi no se
+            // guarda por error el origen tipeado para un mod contra OTRO recien seleccionado.
+            if self.selected.as_deref() != Some(id.as_str()) {
+                self.mod_source_input.clear();
+            }
             self.selected = Some(id);
         }
         if let Some(id) = toggle {
@@ -264,6 +281,84 @@ impl App {
                 self.confirm_uninstall = Some(id.clone());
             }
         });
+
+        // --- Actualizaciones (upstream del mod) ---------------------------------
+        ui.add_space(6.0);
+        ui.separator();
+        let source = crate::modupdate::effective_source(&m, &self.cfg);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Origen:").strong());
+            match &source {
+                Some(src) => {
+                    ui.label(src.label());
+                    ui.hyperlink_to("abrir", src.web_url());
+                }
+                None => {
+                    ui.label(egui::RichText::new("sin definir — pegalo abajo").weak());
+                }
+            }
+        });
+        // Pegar/cambiar el origen (se recuerda en config.mod_sources).
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.mod_source_input)
+                    .hint_text("usuario/repo  o  URL de Nexus")
+                    .desired_width(280.0),
+            );
+            let parsed = crate::modsource::ModSource::parse(&self.mod_source_input);
+            if ui
+                .add_enabled(parsed.is_some(), egui::Button::new("Guardar origen"))
+                .clicked()
+                && let Some(src) = parsed
+            {
+                self.cfg.mod_sources.insert(id.clone(), src.to_storage());
+                let _ = crate::config::save(&self.cfg);
+                self.mod_source_input.clear();
+                self.mod_updates.remove(&id);
+            }
+        });
+        // Chequear / actualizar segun el tipo de origen.
+        if let Some(src) = &source {
+            if src.supports_auto_download() {
+                ui.horizontal(|ui| {
+                    let checking = self.mod_update_job.is_some();
+                    if ui
+                        .add_enabled(!checking, egui::Button::new("Buscar actualizacion"))
+                        .clicked()
+                    {
+                        self.check_mod_update(ctx, id.clone(), src.clone());
+                    }
+                    if checking {
+                        ui.spinner();
+                    }
+                });
+                if let Some(upd) = self.mod_updates.get(&id).cloned() {
+                    let chan = if upd.prerelease { "beta" } else { "estable" };
+                    ui.colored_label(
+                        ACCENT,
+                        format!(
+                            "● v{} disponible ({chan}) · tenes v{}",
+                            upd.latest,
+                            upd.current.as_deref().unwrap_or("?")
+                        ),
+                    );
+                    if ui
+                        .add_enabled(can_act, egui::Button::new("Actualizar a esta version"))
+                        .clicked()
+                    {
+                        self.apply_mod_update(ctx, id.clone(), upd);
+                    } else if !can_act && self.game_running {
+                        ui.colored_label(WARN, "Cerra Slay the Spire 2 para actualizar.");
+                    }
+                }
+            } else {
+                // Nexus: la descarga auto necesita el handler nxm:// (fase 2); por ahora, abrir.
+                ui.horizontal(|ui| {
+                    ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
+                    ui.label(egui::RichText::new("(descarga automatica de Nexus: fase 2)").weak());
+                });
+            }
+        }
     }
 
     fn install_picked(&mut self, ctx: &egui::Context, zip: bool) {
@@ -322,6 +417,79 @@ impl App {
                 manager::enable(&install, &id)?;
                 Ok(format!("habilitado: {id}"))
             }
+        });
+    }
+
+    // --- auto-update de mods (upstream GitHub) ------------------------------
+
+    /// Chequea en un hilo si hay version nueva de `id` en su origen GitHub (segun el canal global).
+    fn check_mod_update(&mut self, ctx: &egui::Context, id: String, src: ModSource) {
+        let ModSource::GitHub { owner, repo } = src else {
+            return; // Nexus: el chequeo via API es fase 2
+        };
+        let current = self
+            .mods
+            .iter()
+            .find(|m| m.id() == id)
+            .and_then(|m| m.manifest.version.clone());
+        let installed_tag = self.cfg.mod_installed_tag.get(&id).cloned();
+        let prefer_beta = self.cfg.prefer_beta;
+        let (tx, rx) = channel();
+        self.mod_update_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let res = crate::modupdate::check_github(
+                &owner,
+                &repo,
+                &id,
+                current.as_deref(),
+                installed_tag.as_deref(),
+                prefer_beta,
+            )
+            .map_err(|e| format!("{e:#}"));
+            let _ = tx.send((id, res));
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_mod_update(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.mod_update_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((id, Ok(Some(upd)))) => {
+                self.mod_updates.insert(id, upd);
+                self.mod_update_job = None;
+            }
+            Ok((id, Ok(None))) => {
+                self.mod_updates.remove(&id);
+                self.show_toast(format!("{id}: ya estas en la ultima version"), false);
+                self.mod_update_job = None;
+            }
+            Ok((_, Err(e))) => {
+                self.show_toast(e, true);
+                self.mod_update_job = None;
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint(),
+            Err(TryRecvError::Disconnected) => self.mod_update_job = None,
+        }
+    }
+
+    /// Baja e instala la version nueva (reemplaza solo si el zip es ese mod, preserva enable/disable,
+    /// recuerda el tag). Re-escanea al terminar; `poll_action` recarga la config (toma el tag nuevo).
+    fn apply_mod_update(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        upd: crate::modupdate::ModUpdate,
+    ) {
+        let Some(install) = self.install.clone() else {
+            return;
+        };
+        self.mod_updates.remove(&id);
+        self.run_action(ctx, format!("actualizando {id}..."), move || {
+            crate::modupdate::apply(&install, &upd.mod_id, &upd.asset_url, &upd.tag)?;
+            Ok(format!("actualizado: {id} v{}", upd.latest))
         });
     }
 }

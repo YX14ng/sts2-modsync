@@ -97,6 +97,33 @@ pub fn install_from_zip(install: &Install, zip_path: &Path, overwrite: bool) -> 
     res
 }
 
+/// Instala un `.zip` REEMPLAZANDO el mod `expected_id`, pero SOLO si el `<id>.json` DENTRO del zip
+/// declara EXACTAMENTE ese id. Asi un release del upstream de A nunca puede pisar a B: el id que se
+/// instala lo controla el contenido del zip (el upstream), no el llamador, asi que sin esta guarda
+/// `install_from_zip(overwrite)` mandaria a la papelera el mod con el id del zip, sea cual sea. Para
+/// el auto-update de mods (`modupdate::apply`).
+pub fn install_update_zip(install: &Install, zip_path: &Path, expected_id: &str) -> Result<()> {
+    ensure_game_closed()?;
+    let tmp = extract_zip_to_temp(zip_path)?;
+    let res = (|| {
+        let mod_root = find_mod_root(&tmp).context(
+            "el .zip del release no trae un mod empaquetado como carpeta con su <id>.json \
+             (¿el release sube el .dll suelto? bajalo a mano e instala con 'Instalar .zip')",
+        )?;
+        let manifest = modlist::read_manifest(&mod_root)
+            .context("el mod del .zip no tiene <id>.json valido")?;
+        if manifest.id != expected_id {
+            bail!(
+                "el .zip del release trae el mod {:?}, no {expected_id:?}: abortado para no pisar otro mod",
+                manifest.id
+            );
+        }
+        install_from_dir(install, &mod_root, true).map(|_| ())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    res
+}
+
 /// Abre una carpeta en el explorador de Windows.
 pub fn open_folder(path: &Path) -> Result<()> {
     std::process::Command::new("explorer")
@@ -358,6 +385,32 @@ mod tests {
         let id = install_from_zip(&install, &zip_path, false).unwrap();
         assert_eq!(id, "Mod");
         assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn install_update_zip_rechaza_un_id_distinto_y_no_pisa_otro_mod() {
+        use std::io::Write;
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_update_zip_id");
+        make_mod(&install.mods_dir, "Otro"); // un mod ya instalado que NO hay que pisar
+        // .zip que dice ser el mod "Otro" (no "Mod"): actualizar "Mod" NO debe instalarlo/pisar "Otro".
+        let zip_path = install.root.join("rel.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            zw.start_file("Otro/Otro.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(br#"{"id":"Otro","version":"9.9"}"#).unwrap();
+            zw.finish().unwrap();
+        }
+        let err = install_update_zip(&install, &zip_path, "Mod");
+        assert!(err.is_err(), "un id distinto debe ABORTAR");
+        // El mod "Otro" original sigue intacto (NO fue a la papelera ni se reemplazo).
+        assert!(install.mods_dir.join("Otro").join("Otro.json").is_file());
         let _ = std::fs::remove_dir_all(&install.root);
     }
 

@@ -35,6 +35,19 @@ pub struct Config {
     /// Ultimo nombre de set publicado (para pre-cargar el form de Publicar).
     #[serde(default)]
     pub publish_set_name: Option<String>,
+    /// Origen de cada mod para auto-actualizar (id del mod -> `ModSource::to_storage()`, ej
+    /// "github:owner/repo" o "nexus:game/id"). Lo pega el usuario; tiene prioridad sobre el origen
+    /// declarado en el `<id>.json` del mod.
+    #[serde(default)]
+    pub mod_sources: HashMap<String, String>,
+    /// Canal GLOBAL de actualizacion: `true` = seguir versiones BETA (pre-releases en GitHub),
+    /// `false` = solo estables (MAIN). Default estable.
+    #[serde(default)]
+    pub prefer_beta: bool,
+    /// Ultimo TAG de release que `mod-update` instalo por mod (id -> tag). Sirve para no re-ofrecer
+    /// la MISMA version a un mod que no declara `version` en su `<id>.json` (sino seria un loop).
+    #[serde(default)]
+    pub mod_installed_tag: HashMap<String, String>,
 }
 
 fn default_schema() -> u32 {
@@ -50,6 +63,9 @@ impl Default for Config {
             set_versions: HashMap::new(),
             publish_repo: None,
             publish_set_name: None,
+            mod_sources: HashMap::new(),
+            prefer_beta: false,
+            mod_installed_tag: HashMap::new(),
         }
     }
 }
@@ -195,6 +211,8 @@ mod tests {
     fn config_round_trip_toml() {
         let mut set_versions = HashMap::new();
         set_versions.insert("https://a/b.json".to_string(), "1.2.3".to_string());
+        let mut mod_sources = HashMap::new();
+        mod_sources.insert("FGOCore".to_string(), "github:YX14ng/FGOCore".to_string());
         let cfg = Config {
             schema: CONFIG_SCHEMA,
             install_root: Some(PathBuf::from("/tmp/StS2")),
@@ -202,6 +220,9 @@ mod tests {
             set_versions,
             publish_repo: Some("YX14ng/sts2-mods".into()),
             publish_set_name: Some("Mi Set".into()),
+            mod_sources,
+            prefer_beta: true,
+            mod_installed_tag: HashMap::new(),
         };
         let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
         assert_eq!(back.install_root, cfg.install_root);
@@ -209,6 +230,8 @@ mod tests {
         assert_eq!(back.set_versions, cfg.set_versions);
         assert_eq!(back.publish_repo, cfg.publish_repo);
         assert_eq!(back.publish_set_name, cfg.publish_set_name);
+        assert_eq!(back.mod_sources, cfg.mod_sources);
+        assert_eq!(back.prefer_beta, cfg.prefer_beta);
         assert_eq!(back.schema, CONFIG_SCHEMA);
     }
 

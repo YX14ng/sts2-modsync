@@ -3,6 +3,23 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.7.0] - 2026-06-15 — Auto-update de mods desde su upstream (GitHub) · fase 1
+
+- **Cada mod puede tener un ORIGEN** (su repo de GitHub o su pagina de Nexus) y el programa
+  **chequea/baja la version nueva** y la instala (reemplaza preservando si estaba habilitado o no).
+- **Canal BETA vs MAIN global:** un switch ("Canal beta") elige seguir pre-releases (BETA) o solo
+  releases estables (MAIN). En GitHub el mapeo es limpio: BETA = `prerelease`, MAIN = release estable.
+- **De donde sale el origen:** del `<id>.json` del mod si trae `repository`/`url`/`homepage`, o lo
+  **pegas vos** en el detalle del mod (usuario/repo o URL de Nexus) — se recuerda en `config.mod_sources`.
+- **GitHub: auto-update completo** (gratis, sin login). **Nexus: fase 1 solo chequeo/abrir la pagina**
+  — la descarga automatica de Nexus necesita Premium o el handler `nxm://`, que llega en la **fase 2**.
+- GUI (pestaña Mods): en el detalle del mod, el origen + "Buscar actualizacion" + "Actualizar".
+  CLI: `mod-source <id> <usuario/repo|URL>`, `mod-check [<id>]`, `mod-update <id>`.
+
+> Seguridad: la actualizacion baja un `.zip` por HTTPS y lo extrae con la misma defensa anti
+> zip-slip que el install manual; no hay firma por-mod (el ancla de confianza es el repo upstream que
+> VOS elegiste como origen, igual que bajar el mod a mano de ahi).
+
 ## [1.6.0] - 2026-06-15 — Delta intra-`.pck` (al actualizar 1 mod, solo baja el diff)
 
 - **Update incremental DENTRO de un archivo:** si cambiás una carta de un mod, tus amigos que ya
