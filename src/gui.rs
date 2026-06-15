@@ -25,7 +25,10 @@ const BAD: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x57, 0x57);
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x7C, 0x9C, 0xFF);
 
 /// Resultado del worker que baja el set-manifest + su `.minisig` opcional.
-type FetchResult = std::result::Result<(String, Option<String>), String>;
+/// Resultado del worker que baja el manifest: (texto del manifest, `.minisig` opcional, URL REAL
+/// resuelta del manifest). La URL resuelta puede diferir de lo que tipeo el usuario: una
+/// suscripcion por repo (`repo:owner/repo`) se resuelve al manifest del ultimo release.
+type FetchResult = std::result::Result<(String, Option<String>, String), String>;
 
 /// Tema moderno: oscuro/claro con acento, espaciado generoso y tipografia mas grande.
 /// El default de egui se ve "CMD"; esto le da jerarquia visual.
@@ -263,8 +266,9 @@ struct App {
     update_avail: Option<update::Release>,
 
     // Sets suscritos: chequeo manual de "version nueva" (worker que baja cada manifest).
-    set_check_job: Option<Receiver<std::collections::HashMap<String, String>>>,
-    set_updates: std::collections::HashMap<String, String>, // url -> version remota mas nueva
+    // El worker devuelve (updates clave->version_nueva, cantidad de sets que NO se pudieron chequear).
+    set_check_job: Option<Receiver<(std::collections::HashMap<String, String>, usize)>>,
+    set_updates: std::collections::HashMap<String, String>, // clave de sub -> version remota mas nueva
 
     dark_mode: bool,
 }
@@ -363,16 +367,44 @@ impl App {
         std::thread::spawn(move || {
             let mut updates: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
-            for url in &sets {
-                if let Ok(text) = transport::get_text(url)
-                    && let Ok(m) = SetManifest::from_json_str(&text)
-                    && let Some(cur) = known.get(url)
-                    && update::is_newer(&m.set_version, cur)
+            // Sets que NO se pudieron chequear (rate-limit anonimo de GitHub 60/h, sin conexion,
+            // repo sin releases). Se reportan al usuario: "Buscar actualizaciones" no debe quedar mudo.
+            let mut failed = 0usize;
+            for key in &sets {
+                // Suscripcion por repo -> resolver la URL del ultimo release; URL fija -> tal cual.
+                let url = match config::as_repo_sub(key) {
+                    Some(owner_repo) => match owner_repo.split_once('/') {
+                        Some((owner, repo)) => {
+                            match transport::resolve_latest_manifest(owner, repo) {
+                                Ok(u) => u,
+                                Err(_) => {
+                                    failed += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        None => {
+                            failed += 1;
+                            continue;
+                        }
+                    },
+                    None => key.clone(),
+                };
+                match transport::get_text(&url)
+                    .ok()
+                    .and_then(|t| SetManifest::from_json_str(&t).ok())
                 {
-                    updates.insert(url.clone(), m.set_version.clone());
+                    Some(m) => {
+                        if let Some(cur) = known.get(key)
+                            && update::is_newer(&m.set_version, cur)
+                        {
+                            updates.insert(key.clone(), m.set_version.clone());
+                        }
+                    }
+                    None => failed += 1,
                 }
             }
-            let _ = tx.send(updates);
+            let _ = tx.send((updates, failed));
             ctx.request_repaint();
         });
     }
@@ -382,9 +414,17 @@ impl App {
             return;
         };
         match rx.try_recv() {
-            Ok(updates) => {
+            Ok((updates, failed)) => {
                 self.set_updates = updates;
                 self.set_check_job = None;
+                if failed > 0 {
+                    self.show_toast(
+                        format!(
+                            "No se pudo chequear {failed} set(s): rate-limit de GitHub (60/h sin login) o sin conexion"
+                        ),
+                        true,
+                    );
+                }
             }
             Err(TryRecvError::Empty) => ctx.request_repaint(),
             Err(TryRecvError::Disconnected) => self.set_check_job = None,
@@ -605,8 +645,12 @@ struct ProgressState {
 struct SyncState {
     screen: SyncScreen,
     url: String,                // input de URL del set
-    source: String,             // etiqueta del set cargado (archivo o URL), vacia = nada cargado
+    repo_input: String, // input "usuario/repo" para suscribirse por repo (sigue el ultimo release)
+    source: String,     // etiqueta del set cargado (archivo o URL), vacia = nada cargado
     loaded_url: Option<String>, // URL DE ORIGEN del set cargado (None si vino de archivo)
+    /// Clave estable de la suscripcion del set cargado (entrada de `subscribed_sets`): una URL fija
+    /// o `repo:owner/repo`. Bajo ella se registra la version sincronizada. None si vino de archivo.
+    sub_key: Option<String>,
     manifest: Option<SetManifest>,
     load_err: Option<String>,
     /// Estado de la verificacion de firma del set cargado (se muestra afirmativo en la UI).
@@ -1687,6 +1731,7 @@ impl App {
     fn ui_sync_review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut do_load_url = false;
         let mut do_open_file = false;
+        let mut do_subscribe_repo = false;
         let mut load_saved: Option<String> = None;
         let mut del_saved: Option<String> = None;
         let mut check_updates = false;
@@ -1712,6 +1757,23 @@ impl App {
                     .clicked()
                 {
                     do_open_file = true;
+                }
+            });
+            // Suscribirse por REPO: sigue el ULTIMO release (no hay que re-pegar la URL al actualizar).
+            ui.horizontal(|ui| {
+                ui.label("o Repositorio:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sync.repo_input)
+                        .hint_text("usuario/repo (sigue el ultimo release)")
+                        .desired_width(300.0),
+                );
+                let can =
+                    !busy_any && crate::github::normalize_repo(&self.sync.repo_input).is_some();
+                if ui
+                    .add_enabled(can, egui::Button::new("Suscribirse"))
+                    .clicked()
+                {
+                    do_subscribe_repo = true;
                 }
             });
             if self.sync.fetch_job.is_some() {
@@ -1769,12 +1831,15 @@ impl App {
         if do_open_file {
             self.open_manifest(ctx);
         }
+        if do_subscribe_repo {
+            self.subscribe_repo(ctx);
+        }
         if check_updates {
             self.check_set_updates(ctx);
         }
         if let Some(s) = load_saved {
-            self.sync.url = s;
-            self.load_url(ctx);
+            // Re-sincronizar un set guardado (URL fija o `repo:owner/repo`): resuelve y baja.
+            self.load_source(s, ctx);
         }
         if let Some(s) = del_saved {
             self.cfg.subscribed_sets.retain(|x| *x != s);
@@ -1955,21 +2020,64 @@ impl App {
     /// Baja el set-manifest de `self.sync.url` en un worker (no bloquea la UI).
     fn load_url(&mut self, ctx: &egui::Context) {
         let url = self.sync.url.trim().to_string();
-        if url.is_empty() {
+        self.load_source(url, ctx);
+    }
+
+    /// Suscribirse a un REPO (`usuario/repo`): sigue el ULTIMO release. Guarda la suscripcion como
+    /// `repo:owner/repo` y la carga (resolviendo el ultimo release en el worker).
+    fn subscribe_repo(&mut self, ctx: &egui::Context) {
+        let Some(repo) = crate::github::normalize_repo(&self.sync.repo_input) else {
+            self.sync.load_err = Some("repositorio invalido (usa usuario/repo)".into());
+            return;
+        };
+        let key = config::repo_sub(&repo);
+        if !self.cfg.subscribed_sets.contains(&key) {
+            self.cfg.subscribed_sets.push(key.clone());
+            let _ = config::save(&self.cfg);
+        }
+        self.sync.repo_input.clear();
+        self.load_source(key, ctx);
+    }
+
+    /// Arranca la descarga del manifest de una "fuente": una URL https directa o una suscripcion
+    /// por repo (`repo:owner/repo`, que el worker resuelve al manifest del ultimo release).
+    /// `sub_key` es ademas la clave estable bajo la que se registra la version sincronizada.
+    fn load_source(&mut self, sub_key: String, ctx: &egui::Context) {
+        let sub_key = sub_key.trim().to_string();
+        if sub_key.is_empty() {
             return;
         }
         self.sync.load_err = None;
+        self.sync.sub_key = Some(sub_key.clone());
+        // Limpiar el set mostrado ANTES de lanzar el fetch: si este falla (404, repo sin releases),
+        // no debe quedar instalable el manifest/plan ANTERIOR apareado con el sub_key NUEVO — eso
+        // registraria la version del set viejo contra la clave equivocada al instalar.
+        self.sync.manifest = None;
+        self.sync.plan = None;
+        self.sync.plan_job = None;
+        self.sync.consent = false;
+        self.sync.sig_status = None;
         let (tx, rx) = channel();
         self.sync.fetch_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let res = transport::get_text(&url)
-                .map(|manifest| {
-                    // La firma es opcional (modo dev no la trae): best-effort.
-                    let sig = transport::get_text(&format!("{url}.minisig")).ok();
-                    (manifest, sig)
-                })
-                .map_err(|e| format!("{e:#}"));
+            let res = (|| -> std::result::Result<_, String> {
+                // Una suscripcion por repo se resuelve al manifest del ultimo release; una URL va tal cual.
+                let url = match config::as_repo_sub(&sub_key) {
+                    Some(owner_repo) => {
+                        let (owner, repo) = owner_repo
+                            .split_once('/')
+                            .ok_or_else(|| format!("repo invalido: {owner_repo:?}"))?;
+                        transport::resolve_latest_manifest(owner, repo)
+                            .map_err(|e| format!("{e:#}"))?
+                    }
+                    None => sub_key.clone(),
+                };
+                let manifest = transport::get_text(&url).map_err(|e| format!("{e:#}"))?;
+                // La firma es opcional (modo dev no la trae): best-effort.
+                let sig = transport::get_text(&format!("{url}.minisig")).ok();
+                Ok((manifest, sig, url))
+            })();
             let _ = tx.send(res);
             ctx.request_repaint();
         });
@@ -1992,15 +2100,16 @@ impl App {
         };
         self.sync.fetch_job = None;
         match res {
-            Ok((text, sig)) => {
-                let url = self.sync.url.trim().to_string();
-                self.load_from_text(&text, url.clone(), sig, ctx);
-                // Guardar la suscripcion si cargo bien (1 clic para re-sincronizar despues).
+            Ok((text, sig, resolved_url)) => {
+                self.load_from_text(&text, resolved_url, sig, ctx);
+                // Guardar la suscripcion (URL fija o `repo:owner/repo`) si cargo bien: 1 clic para
+                // re-sincronizar despues. Se guarda la CLAVE estable, no la URL resuelta del repo.
                 if self.sync.load_err.is_none()
-                    && !url.is_empty()
-                    && !self.cfg.subscribed_sets.contains(&url)
+                    && let Some(key) = self.sync.sub_key.clone()
+                    && !key.is_empty()
+                    && !self.cfg.subscribed_sets.contains(&key)
                 {
-                    self.cfg.subscribed_sets.push(url);
+                    self.cfg.subscribed_sets.push(key);
                     let _ = config::save(&self.cfg);
                 }
             }
@@ -2023,9 +2132,13 @@ impl App {
         self.sync.consent = false;
         self.sync.manifest = None;
         self.sync.sig_status = None;
-        // Recordar la URL de ORIGEN solo si vino por URL (no por archivo): la clave del registro
-        // de version en Done. Asi no se graba la version de un set-archivo contra una URL vieja.
+        // Recordar la URL de ORIGEN solo si vino por URL (no por archivo).
         self.sync.loaded_url = source.starts_with("http").then(|| source.clone());
+        // Un set cargado de ARCHIVO no pertenece a ninguna suscripcion: no registrar su version
+        // contra una `sub_key` vieja que quedo de una carga por URL/repo anterior.
+        if self.sync.loaded_url.is_none() {
+            self.sync.sub_key = None;
+        }
         self.sync.source = source;
         // Firma OPCIONAL para sets: si trae firma se valida (firma mala -> Err), si no, Unsigned.
         match crate::signing::verify_optional(text.as_bytes(), signature.as_deref()) {
@@ -2065,6 +2178,21 @@ impl App {
         };
         match rx.try_recv() {
             Ok(Ok(plan)) => {
+                // Cold-start del indicador "version nueva": si te suscribiste y ya estas AL DIA
+                // (plan noop: nada para bajar ni huerfanos) sin baseline previa, registrala. Asi un
+                // amigo que recibio los archivos por otra via (Drive) y despues se suscribe ve el
+                // proximo release como "nueva vX" sin tener que hacer un sync redundante primero.
+                if plan.is_noop()
+                    && let (Some(key), Some(version)) = (
+                        self.sync.sub_key.clone(),
+                        self.sync.manifest.as_ref().map(|m| m.set_version.clone()),
+                    )
+                    && self.cfg.subscribed_sets.contains(&key)
+                    && !self.cfg.set_versions.contains_key(&key)
+                {
+                    self.cfg.set_versions.insert(key, version);
+                    let _ = config::save(&self.cfg);
+                }
                 self.sync.plan = Some(plan);
                 self.sync.plan_job = None;
             }
@@ -2181,15 +2309,16 @@ impl App {
                     self.mods_loaded = false; // el set cambio en disco -> re-escanear la lista
                     self.sync.plan = None; // el plan viejo quedo obsoleto
                     // Registrar la version sincronizada (alimenta el indicador "version nueva"),
-                    // keyed por la URL DE ORIGEN del set (loaded_url), no por el input box (que
-                    // puede tener una URL vieja si despues se cargo un set de archivo).
-                    if let (Some(version), Some(url)) = (
+                    // keyed por la CLAVE de la suscripcion (sub_key): una URL fija o `repo:owner/repo`.
+                    // Asi una suscripcion por repo conserva su version a traves de releases (la URL
+                    // resuelta cambia cada release, la clave no).
+                    if let (Some(version), Some(key)) = (
                         self.sync.manifest.as_ref().map(|m| m.set_version.clone()),
-                        self.sync.loaded_url.clone(),
-                    ) && self.cfg.subscribed_sets.contains(&url)
+                        self.sync.sub_key.clone(),
+                    ) && self.cfg.subscribed_sets.contains(&key)
                     {
-                        self.cfg.set_versions.insert(url.clone(), version);
-                        self.set_updates.remove(&url);
+                        self.cfg.set_versions.insert(key.clone(), version);
+                        self.set_updates.remove(&key);
                         let _ = config::save(&self.cfg);
                     }
                 }

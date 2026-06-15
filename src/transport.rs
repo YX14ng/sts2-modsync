@@ -139,6 +139,55 @@ impl ModSource for GitHubReleases {
     }
 }
 
+/// Resuelve la URL del `set-manifest.json` del **ULTIMO release** de un repo PUBLICO de GitHub.
+/// Consulta `GET /repos/{owner}/{repo}/releases/latest` (sin login: el rate-limit anonimo de
+/// 60 req/h alcanza de sobra para un chequeo manual) y arma
+/// `https://github.com/<owner>/<repo>/releases/download/<tag>/set-manifest.json`. Asi una
+/// suscripcion por REPO sigue el release mas nuevo sin tener que re-pegar la URL en cada update.
+/// `releases/latest` excluye drafts y pre-releases (lo que GitHub considera "el ultimo").
+pub fn resolve_latest_manifest(owner: &str, repo: &str) -> Result<String> {
+    let api = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("construir cliente http")?;
+    let resp = client
+        .get(&api)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .with_context(|| format!("GET {api}"))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        bail!(
+            "el repo {owner}/{repo} no tiene releases publicados todavia (¿ya publicaste un set?)"
+        );
+    }
+    let body = resp
+        .error_for_status()
+        .context("github api (releases/latest)")?
+        .text()?;
+    manifest_url_from_latest(owner, repo, &body)
+}
+
+/// Parsea el JSON de `releases/latest` y arma la URL del `set-manifest.json` de ese release.
+/// Helper puro (testeable sin red) de [`resolve_latest_manifest`]. El `tag` se valida con
+/// `github::valid_tag` (la MISMA regla que el lado publish): rechaza `/`, `..`, espacios y demas
+/// que romperian la URL, en vez de interpolar texto crudo en el path.
+fn manifest_url_from_latest(owner: &str, repo: &str, body: &str) -> Result<String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).context("json invalido de releases/latest")?;
+    let raw = v
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let tag = crate::github::valid_tag(raw).with_context(|| {
+        format!("el ultimo release de {owner}/{repo} tiene un tag invalido para la URL: {raw:?}")
+    })?;
+    Ok(format!(
+        "https://github.com/{owner}/{repo}/releases/download/{tag}/set-manifest.json"
+    ))
+}
+
 /// GET de una URL y devuelve el body como texto. Para bajar el `set-manifest.json` desde
 /// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
 pub fn get_text(url: &str) -> Result<String> {
@@ -204,6 +253,22 @@ mod tests {
         assert_eq!(join_url("https://x", "abc"), "https://x/abc");
         assert_eq!(join_url("https://x/", "/abc"), "https://x/abc");
         assert_eq!(join_url("https://x///", "//abc"), "https://x/abc");
+    }
+
+    #[test]
+    fn manifest_url_from_latest_arma_la_url_del_ultimo_release() {
+        let body = r#"{"tag_name":"2026.06.20","name":"set","draft":false}"#;
+        assert_eq!(
+            manifest_url_from_latest("YX14ng", "sts2-mods", body).unwrap(),
+            "https://github.com/YX14ng/sts2-mods/releases/download/2026.06.20/set-manifest.json"
+        );
+        // sin tag -> error claro, no una URL rota.
+        assert!(manifest_url_from_latest("o", "r", r#"{"name":"x"}"#).is_err());
+        assert!(manifest_url_from_latest("o", "r", r#"{"tag_name":""}"#).is_err());
+        // tag con '/' (rompe el round-trip del path) -> rechazado por valid_tag, no URL rota.
+        assert!(manifest_url_from_latest("o", "r", r#"{"tag_name":"release/1.0"}"#).is_err());
+        // json invalido -> error (no panic).
+        assert!(manifest_url_from_latest("o", "r", "no json").is_err());
     }
 
     #[test]

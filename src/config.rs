@@ -54,10 +54,30 @@ impl Default for Config {
     }
 }
 
-/// Nombre legible para un set suscripto (la config guarda solo la URL). Para una URL de GitHub
+/// Prefijo de una suscripcion por REPO (sigue el ULTIMO release) en `subscribed_sets`, para
+/// distinguirla de una suscripcion por URL fija (clavada a un tag). Ej: `repo:YX14ng/sts2-mods`.
+/// Una suscripcion por repo se resuelve a la URL del manifest del ultimo release en cada chequeo
+/// (`transport::resolve_latest_manifest`), asi "actualizar" no obliga a re-pegar la URL.
+pub const REPO_SUB_PREFIX: &str = "repo:";
+
+/// Arma la entrada de `subscribed_sets` para una suscripcion por repo (`repo:owner/repo`).
+pub fn repo_sub(owner_repo: &str) -> String {
+    format!("{REPO_SUB_PREFIX}{owner_repo}")
+}
+
+/// Si `entry` es una suscripcion por repo (`repo:owner/repo`), devuelve `owner/repo`; si no, `None`.
+pub fn as_repo_sub(entry: &str) -> Option<&str> {
+    entry.strip_prefix(REPO_SUB_PREFIX)
+}
+
+/// Nombre legible para un set suscripto (la config guarda solo la URL/repo). Para una suscripcion
+/// por repo (`repo:owner/repo`) devuelve "owner/repo (ultimo release)". Para una URL de GitHub
 /// Release `.../USER/REPO/releases/download/TAG/...` devuelve "USER/REPO (TAG)"; si no matchea,
 /// usa los ultimos dos segmentos de la ruta. Para mostrar en vez de la URL cruda.
 pub fn set_label(url: &str) -> String {
+    if let Some(repo) = as_repo_sub(url) {
+        return format!("{repo} (ultimo release)");
+    }
     let trimmed = url.split(['?', '#']).next().unwrap_or(url);
     let segs: Vec<&str> = trimmed
         .trim_end_matches('/')
@@ -183,6 +203,20 @@ mod tests {
         assert_eq!(back.publish_repo, cfg.publish_repo);
         assert_eq!(back.publish_set_name, cfg.publish_set_name);
         assert_eq!(back.schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn repo_sub_round_trip_y_label() {
+        let key = repo_sub("YX14ng/sts2-mods");
+        assert_eq!(key, "repo:YX14ng/sts2-mods");
+        assert_eq!(as_repo_sub(&key), Some("YX14ng/sts2-mods"));
+        // una URL fija NO es una suscripcion por repo.
+        assert_eq!(
+            as_repo_sub("https://github.com/a/b/releases/download/v1/x.json"),
+            None
+        );
+        // label legible de la suscripcion por repo.
+        assert_eq!(set_label(&key), "YX14ng/sts2-mods (ultimo release)");
     }
 
     #[test]

@@ -271,7 +271,31 @@ fn cmd_seed(_args: &[String]) -> Result<()> {
 }
 
 fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
+    use sts2_modsync::github;
     print_install(install);
+    // `sync repo:owner/repo` (o un `owner/repo` suelto que no sea un archivo): sigue el ULTIMO
+    // release del repo (resuelve la URL del manifest), igual que la suscripcion por repo del GUI.
+    // Para el `owner/repo` suelto exigimos que NO parezca un path a un archivo (un solo `/`, sin
+    // `.json` ni `\`), asi un typo de ruta da "no such file" y no un 404 confuso contra la API.
+    let looks_like_file =
+        src.ends_with(".json") || src.contains('\\') || src.matches('/').count() != 1;
+    let repo = config::as_repo_sub(src)
+        .and_then(github::normalize_repo)
+        .or_else(|| {
+            (!src.starts_with("http") && !looks_like_file && !Path::new(src).exists())
+                .then(|| github::normalize_repo(src))
+                .flatten()
+        });
+    let resolved = match &repo {
+        Some(owner_repo) => {
+            let (owner, name) = owner_repo.split_once('/').context("repo invalido")?;
+            let url = transport::resolve_latest_manifest(owner, name)?;
+            println!("Repo {owner_repo}: ultimo release -> {url}\n");
+            Some(url)
+        }
+        None => None,
+    };
+    let src = resolved.as_deref().unwrap_or(src);
     let (text, sig) = if src.starts_with("http") {
         let t = transport::get_text(src)?;
         let s = transport::get_text(&format!("{src}.minisig")).ok(); // firma opcional
@@ -578,7 +602,9 @@ fn print_help() {
     println!("  enable  <id>          habilita un mod (mueve la carpeta a mods/)");
     println!("  disable <id>          deshabilita un mod (a mods_disabled/)");
     println!("  launch                lanza el juego");
-    println!("  sync    <set.json>    dry-run del plan de sincronizacion de un set");
+    println!(
+        "  sync <set.json|url|owner/repo>  dry-run del plan; con owner/repo sigue el ultimo release"
+    );
     println!(
         "  publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>]"
     );

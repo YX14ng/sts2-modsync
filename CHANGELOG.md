@@ -3,6 +3,23 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.5.0] - 2026-06-15 — Suscribirse a un REPO (sigue el ultimo release)
+
+- Ahora podes **suscribirte a un repo** (`usuario/repo`) en vez de a la URL de un release fijo. El
+  programa **resuelve el ULTIMO release** (`GET /releases/latest`, sin login) en cada "Buscar
+  actualizaciones" / re-sync, asi cuando el modder publica un release nuevo (con `publish`, que sube
+  otro release al mismo repo desde 1.4.0) tus amigos lo ven **sin tener que re-pegar la URL**.
+- Combinado con el delta por BLAKE3 que ya existia: al actualizar, **solo se baja lo que cambio**
+  (los `.pck` que no cambiaron no se vuelven a bajar; el delta DENTRO de un `.pck` sigue siendo fase 3).
+- GUI (pestaña Sync): campo **"o Repositorio: usuario/repo"** + boton "Suscribirse". Los sets guardados
+  muestran "owner/repo (ultimo release)" para las suscripciones por repo. Las suscripciones por URL
+  fija de antes **siguen funcionando igual** (no hay migracion forzada).
+- CLI: `sync owner/repo` (o `sync repo:owner/repo`) hace el dry-run del plan resolviendo el ultimo release.
+
+> Nota: la resolucion usa la API anonima de GitHub (60 req/hora) — alcanza de sobra para chequeos
+> manuales. La descarga de assets sigue siendo por el CDN directo (sin tocar la API), via el
+> `base_url` que el manifest firmado trae para ese release.
+
 ## [1.4.0] - 2026-06-14 — Recordar el repo de publicacion (no recrear repos)
 
 - La app **RECUERDA el repositorio** donde publicaste tus mods (`config.publish_repo`): "actualizar

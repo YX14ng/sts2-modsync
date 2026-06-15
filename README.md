@@ -53,7 +53,8 @@ cargo run -- list                 # lista los mods instalados (default)
 cargo run -- enable  <id>         # habilita un mod (mueve la carpeta a mods/)
 cargo run -- disable <id>         # deshabilita un mod (a mods_disabled/)
 cargo run -- launch               # lanza el juego
-cargo run -- sync set-manifest.example.json   # dry-run del plan de sincronizacion
+cargo run -- sync set-manifest.example.json   # dry-run del plan (archivo/URL)
+cargo run -- sync USER/REPO                    # ...o un repo: sigue el ULTIMO release
 cargo run -- publish --name "Mi Set" --version 0.0.1 --repo USER/REPO --out ./pub   # (modder)
 # El --repo se RECUERDA: la proxima vez podes omitirlo y sube OTRO release al MISMO repo.
 ```

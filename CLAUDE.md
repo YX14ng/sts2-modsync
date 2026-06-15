@@ -14,14 +14,21 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.4.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.5.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
-GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Y
-1.4.0: la app **recuerda el repo de publicacion** (`config.publish_repo`), asi "actualizar la lista"
-es subir OTRO release al MISMO repo (no recrear repos); el `--repo`/tag se sanean antes de armar el
-`base_url` firmado. Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar):
-crear el repo de mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, delta intra-`.pck`.
+GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
+- **1.4.0:** la app **recuerda el repo de publicacion** (`config.publish_repo`), asi "actualizar la
+  lista" es subir OTRO release al MISMO repo (no recrear repos); el `--repo`/tag se sanean antes de
+  armar el `base_url` firmado.
+- **1.5.0:** podes **suscribirte a un REPO** (`repo:owner/repo` en `subscribed_sets`) que sigue el
+  ULTIMO release: `transport::resolve_latest_manifest` consulta `/releases/latest` (sin login) y arma
+  la URL del manifest; con el delta por BLAKE3, al actualizar **solo se baja lo que cambio**. Las
+  suscripciones por URL fija de antes siguen andando (sin migracion).
+
+Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): crear el repo de
+mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, **delta intra-`.pck`** (que cambiar una
+carta no rebaje el `.pck` entero — el unico pedazo que falta para que "actualizar 1 mod" sea minimo).
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
@@ -84,7 +91,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 
 - GUI (mod manager): `cargo run --features gui` SIN argumentos (single-exe: el mismo binario
   `sts2-modsync` abre la GUI si no hay subcomandos). Pestañas Mods/Sync/Perfiles/Publicar.
-- CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json>` (dry-run)
+- CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json|url|owner/repo>`
+  (dry-run; con `owner/repo` —o `repo:owner/repo`— sigue el ULTIMO release via `/releases/latest`)
   · `publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>] [--no-upload]`
     (modder; por default SUBE al Release. El **`--repo` se RECUERDA** en `config.publish_repo`: la
     proxima vez podes omitirlo y publica OTRO release en el MISMO repo —el GUI deriva el `base_url`
