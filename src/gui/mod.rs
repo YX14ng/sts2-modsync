@@ -32,13 +32,16 @@ use std::sync::{Arc, Mutex};
 use sync_tab::SyncState;
 use widgets::{Toast, nav_item, toast_hint};
 
-const WARN: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x00);
-const OK: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
-const BAD: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x57, 0x57);
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x7C, 0x9C, 0xFF);
+const WARN: egui::Color32 = egui::Color32::from_rgb(0xC8, 0x5A, 0x00);
+const OK: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0x43);
+const BAD: egui::Color32 = egui::Color32::from_rgb(0xD3, 0x3A, 0x3A);
+/// Acento (azul royal) elegido para leerse bien sobre fondo OSCURO y CLARO (el periwinkle de antes
+/// quedaba lavado en modo claro).
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x4F, 0x6B, 0xED);
 
 /// Tema moderno: oscuro/claro con acento, espaciado generoso y tipografia mas grande.
-/// El default de egui se ve "CMD"; esto le da jerarquia visual.
+/// El default de egui se ve "CMD"; esto le da jerarquia visual. El modo CLARO tiene su propia
+/// paleta (superficies cohesivas + texto oscuro + seleccion con contraste), no el gris plano default.
 fn apply_theme(ctx: &egui::Context, dark: bool) {
     let mut style = (*ctx.global_style()).clone();
     let mut v = if dark {
@@ -46,14 +49,25 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     } else {
         egui::Visuals::light()
     };
-    v.selection.bg_fill = ACCENT.linear_multiply(0.45);
     v.hyperlink_color = ACCENT;
     if dark {
+        v.selection.bg_fill = ACCENT.linear_multiply(0.45);
         v.panel_fill = egui::Color32::from_rgb(0x17, 0x19, 0x21);
         v.window_fill = egui::Color32::from_rgb(0x1D, 0x20, 0x2A);
         v.extreme_bg_color = egui::Color32::from_rgb(0x10, 0x12, 0x18);
         v.faint_bg_color = egui::Color32::from_rgb(0x23, 0x26, 0x32);
         v.override_text_color = Some(egui::Color32::from_rgb(0xDA, 0xDE, 0xE8));
+    } else {
+        // Jerarquia de superficies: central/nav gris claro, topbar y CARDS blancas (resaltan),
+        // inputs apenas grises. Texto slate oscuro. Seleccion azul palida (texto oscuro legible).
+        v.panel_fill = egui::Color32::from_rgb(0xE7, 0xEB, 0xF2); // central + nav (el "escritorio")
+        v.window_fill = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF); // topbar + popups
+        v.faint_bg_color = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF); // cards (card() usa faint)
+        v.extreme_bg_color = egui::Color32::from_rgb(0xF2, 0xF4, 0xF9); // inputs / scroll
+        v.override_text_color = Some(egui::Color32::from_rgb(0x1E, 0x23, 0x30));
+        v.selection.bg_fill = egui::Color32::from_rgb(0xCD, 0xD9, 0xFB);
+        v.selection.stroke.color = egui::Color32::from_rgb(0x1E, 0x23, 0x30);
+        v.widgets.noninteractive.bg_stroke.color = egui::Color32::from_rgb(0xD3, 0xD9, 0xE3); // bordes de cards
     }
     style.visuals = v;
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);

@@ -150,8 +150,10 @@ pub fn apply(rel: &Release) -> Result<()> {
     if rel.zip_url.is_empty() {
         bail!("el release {} no trae un asset .zip", rel.tag);
     }
-    // HTTPS obligatorio: se baja y EJECUTA un binario. La firma minisign es el ancla fuerte,
-    // pero rechazar http:// es defensa en profundidad (no servir el exe en claro).
+    // HTTPS obligatorio: se baja y EJECUTA un binario. El ancla de confianza es HTTPS + que el
+    // release viene del repo del dueño (estandar para auto-update); rechazar http:// es defensa en
+    // profundidad (no servir el exe en claro). Ademas, antes de relanzar se verifica que el exe
+    // nuevo ARRANQUE (`--health-check`) con rollback al `.bak` si falla. NO se exige firma minisign.
     crate::transport::require_https(&rel.zip_url)?;
     let bytes = client()?
         .get(&rel.zip_url)
@@ -160,20 +162,6 @@ pub fn apply(rel: &Release) -> Result<()> {
         .error_for_status()?
         .bytes()
         .context("leyendo el zip")?;
-
-    // Verificar la firma minisign del zip (si `PUBLISHER_PUBKEY` esta seteada). Cierra el
-    // vector "release/cuenta de GitHub comprometida sirve un binario malicioso". Con la clave
-    // vacia (modo dev) NO verifica, igual que la sync.
-    let sig_url = format!("{}.minisig", rel.zip_url);
-    crate::transport::require_https(&sig_url)?; // tambien la firma por HTTPS (defensa en profundidad)
-    let sig = client()?
-        .get(&sig_url)
-        .send()
-        .ok()
-        .and_then(|r| r.error_for_status().ok())
-        .and_then(|r| r.text().ok());
-    crate::signing::verify_with_embedded(&bytes, sig.as_deref())
-        .context("la firma del binario de update NO valida — se aborta la actualizacion")?;
 
     let cur = std::env::current_exe().context("current_exe")?;
 

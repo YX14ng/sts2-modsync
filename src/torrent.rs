@@ -13,6 +13,10 @@
 //! - **Sincronizar:** `HybridSource` implementa `transport::ModSource`: `prepare` se une al
 //!   swarm y baja los archivos pedidos a un staging; `fetch` los mueve a destino. Si no hay
 //!   seeder (swarm muerto), cae al `GitHubReleases` (HTTP).
+//!
+//! **P2P es OPT-IN** (`STS2_P2P=1` o peers manuales en `STS2_P2P_PEERS`). Por default la sync baja
+//! por HTTP: el P2P solo ayuda si el publicador esta seedeando ACTIVAMENTE (raro), y un magnet sin
+//! seeder hacia que `add_torrent` colgara resolviendo metadata -> la barra quedaba en 0% para siempre.
 
 #![cfg(feature = "p2p")]
 
@@ -63,6 +67,14 @@ fn peers_env() -> Option<Vec<std::net::SocketAddr>> {
 /// Desactivar DHT (tests/redes cerradas): `STS2_P2P_NODHT=1`.
 fn nodht_env() -> bool {
     std::env::var("STS2_P2P_NODHT").is_ok()
+}
+
+/// El cliente INTENTA P2P solo si se opta explicitamente (`STS2_P2P=1`) o hay peers manuales
+/// (`STS2_P2P_PEERS`). Por DEFAULT la sync baja por HTTP (GitHub Releases): el P2P solo ayuda si el
+/// publicador esta seedeando, y un magnet sin seeder colgaba la descarga en 0%. El seedeo
+/// (`seed_blocking`, lado modder) NO depende de esto.
+fn p2p_opt_in() -> bool {
+    std::env::var("STS2_P2P").is_ok() || peers_env().is_some()
 }
 
 /// Puerto fijo de escucha del seeder (tests/port-forward): `STS2_P2P_SEED_PORT=6881`.
@@ -249,18 +261,27 @@ impl TorrentSession {
             )
             .await
             .context("creando session librqbit (download)")?;
-            let resp = session
-                .add_torrent(
-                    AddTorrent::from_url(magnet.as_str()),
-                    Some(AddTorrentOptions {
-                        only_files_regex: Some(regex),
-                        overwrite: true,
-                        initial_peers: peers_env(),
-                        ..Default::default()
-                    }),
-                )
-                .await
-                .context("agregando torrent (magnet)")?;
+            // OJO: para un magnet, `add_torrent` resuelve la metadata del swarm/DHT ANTES de devolver
+            // el handle. Sin seeder eso COLGABA para siempre (la barra en 0%), porque el SWARM_WAIT de
+            // abajo solo aplica al poll posterior. Lo acotamos: si no hay metadata en SWARM_WAIT, se
+            // aborta y cae a HTTP.
+            let add = session.add_torrent(
+                AddTorrent::from_url(magnet.as_str()),
+                Some(AddTorrentOptions {
+                    only_files_regex: Some(regex),
+                    overwrite: true,
+                    initial_peers: peers_env(),
+                    ..Default::default()
+                }),
+            );
+            let resp = match tokio::time::timeout(SWARM_WAIT, add).await {
+                Ok(r) => r.context("agregando torrent (magnet)")?,
+                Err(_) => {
+                    anyhow::bail!(
+                        "sin metadata del torrent (no hay seeder) en {SWARM_WAIT:?}; HTTP"
+                    )
+                }
+            };
             let handle = resp
                 .into_handle()
                 .context("el torrent no devolvio handle")?;
@@ -313,19 +334,23 @@ pub struct HybridSource {
 }
 
 impl HybridSource {
-    /// Construye desde el manifest: si trae `magnet`, arma la sesion torrent; siempre tiene
-    /// el backend HTTP como fallback.
+    /// Construye desde el manifest: si se opto por P2P (`p2p_opt_in`) y el manifest trae `magnet`,
+    /// arma la sesion torrent; siempre tiene el backend HTTP como fallback (y como DEFAULT).
     pub fn new(manifest: &SetManifest) -> Self {
-        let torrent = manifest
-            .magnet
-            .as_deref()
-            .and_then(|m| match TorrentSession::new(m) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    eprintln!("[p2p] no se pudo iniciar la sesion torrent: {e:#} -> solo HTTP");
-                    None
-                }
-            });
+        let torrent = if p2p_opt_in() {
+            manifest
+                .magnet
+                .as_deref()
+                .and_then(|m| match TorrentSession::new(m) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        eprintln!("[p2p] no se pudo iniciar la sesion torrent: {e:#} -> solo HTTP");
+                        None
+                    }
+                })
+        } else {
+            None // default: HTTP directo (sin esperar a un swarm que casi nunca tiene seeder)
+        };
         Self {
             torrent,
             http: GitHubReleases::new(),

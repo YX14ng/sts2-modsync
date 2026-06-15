@@ -40,15 +40,10 @@ jobs:
         run: |
           Compress-Archive -Path target/release/sts2-modsync.exe -DestinationPath sts2-modsync-windows-x86_64.zip -Force
 
-      - name: Firmar el zip (si hay clave secreta en secrets; sino no firma)
-        env:
-          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-        run: target/release/sts2-modsync.exe sign sts2-modsync-windows-x86_64.zip
-
-      - name: Crear el GitHub Release (zip + .minisig si se firmo)
+      # El auto-update YA NO exige firma minisign (ancla: HTTPS + repo del dueño + health-check con
+      # rollback). No se firma el binario; el `.minisig` no hace falta.
+      - name: Crear el GitHub Release (zip)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $files = @("sts2-modsync-windows-x86_64.zip")
-          if (Test-Path "sts2-modsync-windows-x86_64.zip.minisig") { $files += "sts2-modsync-windows-x86_64.zip.minisig" }
-          gh release create ${{ github.ref_name }} $files --title ${{ github.ref_name }} --generate-notes
+          gh release create ${{ github.ref_name }} sts2-modsync-windows-x86_64.zip --title ${{ github.ref_name }} --generate-notes

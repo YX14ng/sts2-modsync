@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.10.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.11.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -77,17 +77,16 @@ invariantes, pero el flujo lanzado por el protocolo no tiene prompt).
   usas el mismo, el filtro `v*` del auto-update (`update::check_latest` lista `/releases` y elige el
   mayor tag `vX.Y.Z`) evita que un release de mods (tag tipo `2026.06.14`) dispare un update falso.
 
-**Firma minisign (crate `minisign`) — DOS modelos (desde 1.3.0, ver `signing.rs`):**
-`PUBLISHER_PUBKEY` tiene la clave publica del publicador. La clave SECRETA vive fuera del repo: en
-`%APPDATA%/.../minisign.key` (la genero `keygen`) y como secret de GitHub Actions `MINISIGN_SECRET_KEY`.
+**Firma minisign (crate `minisign`) — capa OPCIONAL solo para SETS (desde 1.3.0, ver `signing.rs`).**
+Desde **1.11.0 el auto-update YA NO exige firma**: `update::apply` no baja ni verifica el `.minisig`
+(el CI tampoco firma el binario). El ancla del auto-update pasa a ser HTTPS + que el release viene del
+repo del dueño (estandar para auto-update) + el `--health-check` con rollback al `.bak` antes de
+relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actualizar.
 - **set-manifests (sync): firma OPCIONAL** (`verify_optional`). El ancla de confianza es HTTPS + la
   URL del publicador (su repo de GitHub) + el content-addressing por BLAKE3. Si el set trae
   `set-manifest.json.minisig` se valida (capa extra) y una firma invalida se rechaza; si no, se
-  acepta como `Unsigned` (la UI lo muestra: verde "verificada" / naranja "sin firma"). Un
-  publicador NO necesita manejar una clave para compartir sets.
-- **binario de auto-update: firma OBLIGATORIA** (`verify_with_embedded`, estricto). El CI corre
-  `sts2-modsync sign <zip>` (`MINISIGN_SECRET_KEY`) y sube `<zip>.minisig`; `update::apply` lo baja
-  y verifica ANTES de reemplazar el exe (cierra el vector "release malicioso"). CLI `sign <archivo>`.
+  acepta como `Unsigned` (la UI lo muestra: verde "verificada" / naranja "sin firma"). `PUBLISHER_PUBKEY`
+  vacia = modo dev (`DevUnverified`). CLI `sign <archivo>` / `keygen` siguen para quien quiera firmar.
 
 `eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
 `self-replace`) es dep normal.
@@ -115,8 +114,12 @@ invariantes, pero el flujo lanzado por el protocolo no tiene prompt).
   firmar) · `seed_blocking` seedea el dir de assets (archivos ya presentes) · `HybridSource`
   implementa `ModSource`: `prepare` se une al swarm y baja los archivos pedidos a un staging,
   `fetch` los copia a destino, y si **no hay seeder** cae a `GitHubReleases` (HTTP). El magnet va
-  en el manifest FIRMADO; `apply` igual verifica BLAKE3, asi que bajar de un peer es seguro. Envs
-  avanzados (LAN/tests): `STS2_P2P_PEERS=ip:port,...`, `STS2_P2P_SEED_PORT`, `STS2_P2P_NODHT`.
+  en el manifest FIRMADO; `apply` igual verifica BLAKE3, asi que bajar de un peer es seguro.
+  **P2P del lado cliente es OPT-IN (desde 1.11.0):** `HybridSource` SOLO intenta torrent si
+  `p2p_opt_in()` (`STS2_P2P=1` o peers manuales); por default la sync baja por HTTP. Antes, un magnet
+  sin seeder colgaba `add_torrent` resolviendo metadata y la barra quedaba en 0%; ahora ademas hay
+  timeout en esa resolucion. Envs (LAN/tests): `STS2_P2P` (opt-in), `STS2_P2P_PEERS=ip:port,...`,
+  `STS2_P2P_SEED_PORT`, `STS2_P2P_NODHT`.
 - **Front:** `main` (CLI con subcomandos) · `gui/` (eframe, feature `gui` que INCLUYE `p2p`):
   partido en submodulos — `gui/mod.rs` (chasis: struct `App` con TODOS los campos privados, `new`,
   tema, `run`, topbar/nav, dispatcher `ui()`, y los metodos transversales scan/accion/toast/auto-update)
@@ -185,8 +188,10 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 
 ## Invariantes que NO romper
 
-- **Seguridad (baja DLLs que el juego ejecuta):** firma del manifiesto (P0) + hash por
-  archivo + HTTPS. Ver §seguridad de HANDOFF.
+- **Seguridad (baja DLLs que el juego ejecuta):** hash por archivo (BLAKE3) + HTTPS son el ancla
+  duro; la firma del manifiesto es una capa OPCIONAL extra (no obligatoria). El auto-update del
+  binario tampoco exige firma: ancla HTTPS + repo del dueño + `--health-check` con rollback. Ver
+  §seguridad de HANDOFF.
 - **Nunca tocar carpetas fuera de `manifest.managed_ids()`** (no pisar mods ajenos del amigo).
 - **Path-traversal:** `manifest::validate_paths` y `manager::safe_id` rechazan `..`/sep/absolutas.
 - **Manager = mover carpetas, juego cerrado:** enable/disable mueven `mods/<id>` ↔

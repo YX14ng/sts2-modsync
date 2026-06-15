@@ -1,17 +1,18 @@
-//! Firma minisign. DOS modelos de confianza, segun lo que se firma:
-//!  - **set-manifests (sync):** la firma es OPCIONAL (`verify_optional`). El ancla de confianza
-//!    es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo te paso, y
-//!    cada asset se verifica por BLAKE3. Si el set TRAE firma se valida (capa extra) y una firma
-//!    INVALIDA se rechaza (tampering); si no trae, se acepta como `Unsigned`. Asi un publicador
-//!    no NECESITA manejar una clave minisign para compartir sets.
-//!  - **binario de auto-update:** la firma es OBLIGATORIA (`verify_with_embedded`, estricto)
-//!    porque baja y EJECUTA un binario; sin firma valida NO se actualiza.
+//! Firma minisign — capa OPCIONAL solo para los **set-manifests (sync)** (`verify_optional`). El
+//! ancla de confianza es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo
+//! te paso, y cada asset se verifica por BLAKE3. Si el set TRAE firma se valida (capa extra) y una
+//! firma INVALIDA se rechaza (tampering); si no trae, se acepta como `Unsigned`. Asi un publicador no
+//! NECESITA manejar una clave minisign para compartir sets.
+//!
+//! El **binario de auto-update** ya NO exige firma: su ancla es HTTPS + que el release viene del repo
+//! del dueño (estandar para auto-update) + el `--health-check` con rollback antes de relanzar. Asi
+//! nadie necesita una clave minisign ni para publicar ni para actualizar.
 //!
 //! La firma garantiza AUTENTICIDAD e INTEGRIDAD (viene del publicador y no fue alterado), NO
 //! inocuidad del codigo del mod. La clave PRIVADA jamas toca al cliente: vive en
 //! `%APPDATA%/.../minisign.key` del modder. `PUBLISHER_PUBKEY` vacia = modo dev.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -35,28 +36,13 @@ pub fn is_enforced() -> bool {
     !PUBLISHER_PUBKEY.is_empty()
 }
 
-/// Verifica con la clave empotrada. Vacia => modo dev (`DevUnverified`, no falla). Con clave
-/// seteada => exige firma valida y devuelve `Verified` (o `Err` si falta/no valida).
-pub fn verify_with_embedded(manifest_bytes: &[u8], signature: Option<&str>) -> Result<SigStatus> {
-    if PUBLISHER_PUBKEY.is_empty() {
-        eprintln!("[seguridad] PUBLISHER_PUBKEY vacia: firma NO verificada (modo dev).");
-        return Ok(SigStatus::DevUnverified);
-    }
-    let sig = signature.context("el set no trae firma y la verificacion es obligatoria")?;
-    verify(PUBLISHER_PUBKEY, manifest_bytes, sig)?;
-    Ok(SigStatus::Verified)
-}
-
-/// Verificacion OPCIONAL para SETS (sync). La firma minisign ya NO es obligatoria: el ancla de
-/// confianza es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo te
-/// paso, y cada asset se verifica por BLAKE3. Reglas:
+/// Verificacion OPCIONAL para SETS (sync). La firma minisign NO es obligatoria en ningun flujo: el
+/// ancla de confianza es que bajaste el manifest por HTTPS desde el repo del publicador que un amigo
+/// te paso, y cada asset se verifica por BLAKE3. Reglas:
 ///  - el set TRAE firma valida -> `Verified` (capa extra de seguridad);
 ///  - el set TRAE firma pero NO valida -> `Err` (señal de tampering, se rechaza);
 ///  - el set NO trae firma -> `Unsigned` (se acepta, confiando en HTTPS + la URL);
 ///  - `PUBLISHER_PUBKEY` vacia -> `DevUnverified`.
-///
-/// OJO: el auto-update SIGUE exigiendo firma (`verify_with_embedded`, estricto) porque baja y
-/// EJECUTA un binario; esto es solo para los set-manifests de sync.
 pub fn verify_optional(manifest_bytes: &[u8], signature: Option<&str>) -> Result<SigStatus> {
     if PUBLISHER_PUBKEY.is_empty() {
         return Ok(SigStatus::DevUnverified);
@@ -134,18 +120,6 @@ mod tests {
         assert!(verify(&pk, data, &sig).is_ok());
         // data distinta NO valida.
         assert!(verify(&pk, b"otra cosa", &sig).is_err());
-    }
-
-    #[test]
-    fn verify_with_embedded_exige_firma_cuando_hay_pubkey() {
-        // Con la verificacion ACTIVA (pubkey empotrada): un set SIN firma o con firma basura
-        // debe rechazarse (no se baja un .dll sin autenticar). En modo dev no aplica.
-        if !is_enforced() {
-            eprintln!("(skip: PUBLISHER_PUBKEY vacia, modo dev)");
-            return;
-        }
-        assert!(verify_with_embedded(b"data", None).is_err());
-        assert!(verify_with_embedded(b"data", Some("no soy una firma")).is_err());
     }
 
     #[test]

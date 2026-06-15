@@ -3,6 +3,24 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.11.0] - 2026-06-15 — auto-update sin minisign · sync P2P opt-in (no mas 0%) · modo claro
+
+- **El auto-update ya NO exige firma minisign.** El ancla de confianza pasa a ser HTTPS + que el
+  release viene del repo del dueño (estandar para auto-update) + el `--health-check` con rollback al
+  `.bak` antes de relanzar. `update::apply` ya no baja ni verifica el `.minisig`; el CI ya no firma el
+  binario. Nadie necesita una clave minisign ni para publicar ni para actualizar. (La firma OPCIONAL
+  de los set-manifests de sync sigue igual: si esta se valida, si no, se acepta por HTTPS + BLAKE3.)
+- **Sync: P2P (torrent) ahora es OPT-IN — se arregla el "se queda en 0%".** Un set publicado trae un
+  `magnet`, y el cliente intentaba P2P primero: si el publicador no estaba seedeando, `add_torrent`
+  colgaba resolviendo la metadata del swarm y la barra quedaba en 0% PARA SIEMPRE (el timeout solo
+  cubria el poll posterior). Ahora la sync baja por **HTTP por default** (GitHub Releases, siempre
+  disponible) y solo intenta P2P si se opta con `STS2_P2P=1` (o peers manuales). Ademas se le puso un
+  timeout a la resolucion de metadata, asi aun optando por P2P cae a HTTP si no hay seeder.
+- **Modo claro rediseñado.** El tema claro tenia el gris plano de egui y un acento lavado. Ahora tiene
+  paleta propia: superficies cohesivas (central gris, cards blancas que resaltan, inputs apenas
+  grises), texto slate oscuro legible y seleccion con contraste. El acento es un azul royal que se lee
+  bien en ambos temas.
+
 ## [1.10.0] - 2026-06-15 — GitHub: elegir/crear repo con un clic · Nexus Premium: actualizar directo
 
 - **GitHub — elegir o crear el repo de publicacion sin tipearlo** (pestaña Publicar, con sesion de
@@ -129,7 +147,8 @@ cambios incompatibles pueden ocurrir en cualquier release.
   si no, se acepta como "sin firma". La UI lo muestra claro: verde "✓ Firma verificada" / naranja
   "● Sin firma: confias en la URL/HTTPS"; la CLI (`sync`) imprime el estado.
 - El **auto-update sigue exigiendo firma** (`verify_with_embedded`, estricto) porque baja y EJECUTA
-  un binario — ese vector NO se relajo.
+  un binario — ese vector NO se relajo. _(Nota: en v1.11.0 esto se removio — el auto-update dejo de
+  exigir firma; ancla HTTPS + repo del dueño + `--health-check` con rollback. Ver el entry de 1.11.0.)_
 
 > Trade-off: un set sin firma confia en que la cuenta de GitHub del publicador no este comprometida
 > (la firma protegia contra eso). Firmar sigue siendo recomendado; ahora es opcional.

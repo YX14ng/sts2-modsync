@@ -81,8 +81,9 @@ modulos peligrosos (`manager.rs`, `transport.rs`, el `apply` del auto-update) te
 - [x] `cargo-audit` en CI (job en ubuntu; falla solo ante CVEs, no ante "unmaintained").
 - [x] Verificacion de firma VISIBLE y afirmativa: `signing::SigStatus` -> verde "Firma verificada"
   / naranja "modo dev" en el GUI, y linea en la CLI (`sync`).
-- [x] `SECURITY.md` (modelo de confianza + reporte) + tests negativos (`require_https`,
-  `verify_with_embedded` exige firma cuando hay pubkey).
+- [x] `SECURITY.md` (modelo de confianza + reporte) + tests negativos (`require_https` rechaza
+  `http://`; firma OPCIONAL de sets via `verify_optional`). (El auto-update dejo de exigir firma en
+  v1.11.0: ancla HTTPS + repo del dueño + `--health-check` con rollback.)
 
 ### 0.6 — Distribuible y diagnosticable · effort bajo-medio · **HECHA (0.2.6)**
 - [x] LICENSE (MIT) + campo `license`. **(BLOQUEANTE legal, bajo)**
