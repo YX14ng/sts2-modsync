@@ -378,6 +378,80 @@ impl Api {
     }
 }
 
+/// Charset legal de un OWNER de GitHub (usuario/org): alfanumerico ASCII + guion.
+fn valid_owner(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Charset legal de un REPO de GitHub: alfanumerico ASCII + `.` `_` `-`. Rechaza `.`/`..` (un `.`
+/// es valido como caracter pero un segmento que ES `.` o contiene `..` seria path-traversal en el
+/// `base_url` firmado: `github.com/owner/../releases/...`).
+fn valid_repo(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && !s.contains("..")
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Normaliza una entrada de repo a `"owner/repo"`. Acepta `owner/repo` o una URL de GitHub
+/// (`https://github.com/owner/repo[/...]`, con o sin `.git`, `?query`/`#fragment` o `/releases/...`).
+/// `None` si no salen dos segmentos VALIDOS (esto rechaza espacios internos, control-chars, CRLF,
+/// `..`, `@host` y demas: el `owner/repo` termina en una URL/base_url firmada y en la API REST, asi
+/// que tiene que estar limpio). El charset se valida contra las reglas reales de GitHub.
+pub fn normalize_repo(input: &str) -> Option<String> {
+    // Sacar query/fragment de una URL pegada del navegador (?tab=readme, #section) ANTES de partir.
+    let s = input.trim().split(['?', '#']).next().unwrap_or("").trim();
+    let s = s
+        .strip_prefix("https://github.com/")
+        .or_else(|| s.strip_prefix("http://github.com/"))
+        .unwrap_or(s);
+    let mut parts = s
+        .trim_start_matches('/')
+        .split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    let owner = parts.next()?;
+    let repo = parts.next()?.trim_end_matches(".git");
+    if valid_owner(owner) && valid_repo(repo) {
+        Some(format!("{owner}/{repo}"))
+    } else {
+        None
+    }
+}
+
+/// Valida un tag/version para NUESTRO esquema de URL (un solo segmento de path): no vacio, sin
+/// espacios ni control-chars, sin `/` (rompe el round-trip con `parse_release_base_url`), sin `..`,
+/// y con al menos un alfanumerico. El charset `[A-Za-z0-9._+-]` cubre SemVer completo (incluido el
+/// build-metadata con `+`, que es seguro en un segmento de path). Devuelve el tag trimeado o `None`.
+/// Se valida ANTES de armar el `base_url` porque ese texto queda EMBEBIDO (y firmado) en el
+/// set-manifest que bajan los amigos.
+pub fn valid_tag(version: &str) -> Option<String> {
+    let v = version.trim();
+    if v.is_empty() || v.contains("..") {
+        return None;
+    }
+    let charset_ok = v
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'));
+    let has_alnum = v.chars().any(|c| c.is_ascii_alphanumeric());
+    if charset_ok && has_alnum {
+        Some(v.to_string())
+    } else {
+        None
+    }
+}
+
+/// `base_url` de descarga del release para `owner/repo` + `version` (el tag, ya VALIDADO con
+/// [`valid_tag`] / [`normalize_repo`] por el llamador): `https://github.com/<owner>/<repo>/releases/download/<version>/`.
+pub fn release_base_url(repo: &str, version: &str) -> String {
+    format!(
+        "https://github.com/{}/releases/download/{}/",
+        repo.trim_matches('/'),
+        version.trim()
+    )
+}
+
 /// Deriva (owner, repo, tag) de un `base_url` de release de GitHub:
 /// `https://github.com/<owner>/<repo>/releases/download/<tag>/`.
 pub fn parse_release_base_url(base_url: &str) -> Option<(String, String, String)> {
@@ -438,5 +512,77 @@ mod tests {
         );
         assert!(parse_release_base_url("https://example.com/x/").is_none());
         assert!(parse_release_base_url("https://github.com/u/r/").is_none()); // sin releases/download
+    }
+
+    #[test]
+    fn normalize_repo_acepta_varias_formas() {
+        let want = Some("YX14ng/sts2-mods".to_string());
+        assert_eq!(normalize_repo("YX14ng/sts2-mods"), want);
+        assert_eq!(
+            normalize_repo("  https://github.com/YX14ng/sts2-mods "),
+            want
+        );
+        assert_eq!(
+            normalize_repo("https://github.com/YX14ng/sts2-mods/releases/download/v1/"),
+            want
+        );
+        assert_eq!(
+            normalize_repo("https://github.com/YX14ng/sts2-mods.git"),
+            want
+        );
+        assert!(normalize_repo("soloesto").is_none());
+        assert!(normalize_repo("").is_none());
+        // round-trip: normalize -> release_base_url -> parse vuelve a owner/repo/tag.
+        let base = release_base_url("YX14ng/sts2-mods", "2.0");
+        assert_eq!(
+            parse_release_base_url(&base),
+            Some(("YX14ng".into(), "sts2-mods".into(), "2.0".into()))
+        );
+    }
+
+    #[test]
+    fn normalize_repo_limpia_y_rechaza_basura() {
+        let want = Some("YX14ng/sts2-mods".to_string());
+        // query/fragment de una URL pegada del navegador: se sacan.
+        assert_eq!(normalize_repo("YX14ng/sts2-mods?tab=readme"), want);
+        assert_eq!(
+            normalize_repo("https://github.com/YX14ng/sts2-mods?tab=readme#x"),
+            want
+        );
+        assert_eq!(normalize_repo("YX14ng/sts2-mods#readme"), want);
+        // espacios alrededor de los segmentos: se trimean.
+        assert_eq!(normalize_repo("  YX14ng / sts2-mods "), want);
+        // el repo de la APP (distinto del de sets) tambien se acepta por la misma regla.
+        assert_eq!(
+            normalize_repo("YX14ng/sts2-modsync"),
+            Some("YX14ng/sts2-modsync".to_string())
+        );
+        // basura que ANTES pasaba como owner/repo roto: ahora None.
+        assert!(normalize_repo("ow ner/re po").is_none()); // espacio interno
+        assert!(normalize_repo("evil.com/owner/repo").is_none()); // owner con '.'
+        assert!(normalize_repo("@evil.com/owner").is_none()); // owner con '@'
+        assert!(normalize_repo("../..").is_none()); // path traversal
+        assert!(normalize_repo("owner/..").is_none()); // '..' en el segmento repo
+        assert!(normalize_repo("owner/.").is_none()); // '.' como repo
+        assert!(normalize_repo("owner/a..b").is_none()); // '..' embebido en el repo
+        assert!(normalize_repo("owner/re\rpo").is_none()); // control char (CR)
+        assert!(normalize_repo("owner/repo:8080").is_none()); // ':' no es charset de repo
+    }
+
+    #[test]
+    fn valid_tag_acepta_tags_normales_y_rechaza_los_que_rompen_la_url() {
+        assert_eq!(valid_tag("v1.2.3"), Some("v1.2.3".into()));
+        assert_eq!(valid_tag("2026.06.14"), Some("2026.06.14".into()));
+        assert_eq!(valid_tag("1.0.0-rc.1"), Some("1.0.0-rc.1".into())); // SemVer pre-release
+        assert_eq!(valid_tag("v1.0.0+build.5"), Some("v1.0.0+build.5".into())); // SemVer +build
+        assert_eq!(valid_tag("  1.0.0 "), Some("1.0.0".into())); // trim de extremos
+        assert!(valid_tag("").is_none());
+        assert!(valid_tag("   ").is_none());
+        assert!(valid_tag("release/1.0").is_none()); // '/' romperia el round-trip del base_url
+        assert!(valid_tag("my version").is_none()); // espacio interno -> URL invalida
+        assert!(valid_tag("v1\r\nHost: evil").is_none()); // CRLF
+        assert!(valid_tag("..").is_none()); // traversal
+        assert!(valid_tag("...").is_none()); // sin alfanumerico
+        assert!(valid_tag("-").is_none()); // sin alfanumerico
     }
 }

@@ -243,7 +243,7 @@ struct App {
     // Pestaña Publicar
     pub_name: String,
     pub_version: String,
-    pub_base_url: String,
+    pub_repo: String, // "owner/repo" (recordado en config para no recrear repos)
     pub_profile: Option<String>, // None = mods habilitados actuales
     pub_out_dir: Option<PathBuf>,
     // Seeding P2P del set publicado: Some(flag) mientras seedea (set flag=true para cortar).
@@ -271,9 +271,13 @@ struct App {
 
 impl App {
     fn new() -> Self {
+        let cfg = config::load();
+        // Pre-cargar el form de Publicar con lo ultimo recordado (repo + nombre del set).
+        let pub_repo = cfg.publish_repo.clone().unwrap_or_default();
+        let pub_name = cfg.publish_set_name.clone().unwrap_or_default();
         let mut app = App {
             tab: Tab::Mods,
-            cfg: config::load(),
+            cfg,
             install: None,
             install_note: String::new(),
             game_running: false,
@@ -291,9 +295,9 @@ impl App {
             profiles: Vec::new(),
             profiles_loaded: false,
             new_profile: String::new(),
-            pub_name: String::new(),
+            pub_name,
             pub_version: String::new(),
-            pub_base_url: String::new(),
+            pub_repo,
             pub_profile: None,
             pub_out_dir: None,
             seed_stop: None,
@@ -1440,19 +1444,46 @@ impl App {
             ui.add(egui::TextEdit::singleline(&mut self.pub_name).desired_width(260.0));
         });
         ui.horizontal(|ui| {
+            ui.label("Repositorio:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.pub_repo)
+                    .hint_text("usuario/repo (se recuerda)")
+                    .desired_width(300.0),
+            );
+        });
+        ui.horizontal(|ui| {
             ui.label("Version (= tag del release):");
             ui.add(egui::TextEdit::singleline(&mut self.pub_version).desired_width(160.0));
         });
-        ui.horizontal(|ui| {
-            ui.label("base_url:");
-            ui.add(egui::TextEdit::singleline(&mut self.pub_base_url).desired_width(460.0));
-        });
-        ui.label(
-            egui::RichText::new(
-                "base_url = https://github.com/USUARIO/REPO/releases/download/<version>/",
-            )
-            .weak(),
-        );
+        // Mostrar a donde va exactamente: cada publicacion es un RELEASE NUEVO en ese repo.
+        if let Some(repo) = crate::github::normalize_repo(&self.pub_repo) {
+            let ver = self.pub_version.trim();
+            if ver.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "→ release '<version>' en github.com/{repo}  (actualizar = otro release, NO otro repo)"
+                    ))
+                    .weak(),
+                );
+            } else if let Some(tag) = crate::github::valid_tag(ver) {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "→ release '{tag}' en github.com/{repo}  (actualizar = otro release, NO otro repo)"
+                    ))
+                    .weak(),
+                );
+            } else {
+                ui.colored_label(
+                    WARN,
+                    format!("Version invalida: '{ver}' (sin espacios ni '/'; ej v1.2.3)"),
+                );
+            }
+        } else if !self.pub_repo.trim().is_empty() {
+            ui.colored_label(
+                WARN,
+                "Repositorio invalido: usa 'usuario/repo' o la URL del repo.",
+            );
+        }
         ui.add_space(4.0);
 
         // Fuente: habilitados actuales o un perfil (radios planos, sin closures sobre self).
@@ -1481,8 +1512,8 @@ impl App {
         let can = self.busy.is_empty()
             && self.action_job.is_none()
             && !self.pub_name.trim().is_empty()
-            && !self.pub_version.trim().is_empty()
-            && !self.pub_base_url.trim().is_empty()
+            && crate::github::valid_tag(&self.pub_version).is_some()
+            && crate::github::normalize_repo(&self.pub_repo).is_some()
             && !ids.is_empty();
         if ui
             .add_enabled(can, egui::Button::new("Publicar (subir al release)"))
@@ -1597,10 +1628,27 @@ impl App {
             return;
         };
         self.pub_out_dir = Some(out_dir.clone());
+        let Some(repo) = crate::github::normalize_repo(&self.pub_repo) else {
+            self.show_toast("repositorio invalido (usa usuario/repo)", true);
+            return;
+        };
+        let Some(version) = crate::github::valid_tag(&self.pub_version) else {
+            self.show_toast(
+                "version/tag invalido (sin espacios ni '/'; ej v1.2.3)",
+                true,
+            );
+            return;
+        };
+        let set_name = self.pub_name.trim().to_string();
+        // RECORDAR el repo + nombre del set: la proxima "actualizacion" reusa el mismo repo
+        // (otro release, NO otro repo). Se guarda aunque la subida despues falle.
+        self.cfg.publish_repo = Some(repo.clone());
+        self.cfg.publish_set_name = Some(set_name.clone());
+        let _ = config::save(&self.cfg);
         let params = publish::PublishParams {
-            set_name: self.pub_name.trim().to_string(),
-            set_version: self.pub_version.trim().to_string(),
-            base_url: self.pub_base_url.trim().to_string(),
+            base_url: crate::github::release_base_url(&repo, &version),
+            set_name,
+            set_version: version,
             published_at: String::new(),
             baselib_version: None,
         };

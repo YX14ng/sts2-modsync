@@ -28,6 +28,13 @@ pub struct Config {
     /// Ultima version sincronizada por set (url -> set_version), para marcar "version nueva".
     #[serde(default)]
     pub set_versions: HashMap<String, String>,
+    /// "owner/repo" del ULTIMO repo donde el modder publico: se reusa para que "actualizar" sea
+    /// subir otro RELEASE al mismo repo (no crear repos nuevos cada vez).
+    #[serde(default)]
+    pub publish_repo: Option<String>,
+    /// Ultimo nombre de set publicado (para pre-cargar el form de Publicar).
+    #[serde(default)]
+    pub publish_set_name: Option<String>,
 }
 
 fn default_schema() -> u32 {
@@ -41,6 +48,8 @@ impl Default for Config {
             install_root: None,
             subscribed_sets: Vec::new(),
             set_versions: HashMap::new(),
+            publish_repo: None,
+            publish_set_name: None,
         }
     }
 }
@@ -164,11 +173,15 @@ mod tests {
             install_root: Some(PathBuf::from("/tmp/StS2")),
             subscribed_sets: vec!["https://a/b.json".into()],
             set_versions,
+            publish_repo: Some("YX14ng/sts2-mods".into()),
+            publish_set_name: Some("Mi Set".into()),
         };
         let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
         assert_eq!(back.install_root, cfg.install_root);
         assert_eq!(back.subscribed_sets, cfg.subscribed_sets);
         assert_eq!(back.set_versions, cfg.set_versions);
+        assert_eq!(back.publish_repo, cfg.publish_repo);
+        assert_eq!(back.publish_set_name, cfg.publish_set_name);
         assert_eq!(back.schema, CONFIG_SCHEMA);
     }
 

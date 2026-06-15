@@ -54,8 +54,8 @@ cargo run -- enable  <id>         # habilita un mod (mueve la carpeta a mods/)
 cargo run -- disable <id>         # deshabilita un mod (a mods_disabled/)
 cargo run -- launch               # lanza el juego
 cargo run -- sync set-manifest.example.json   # dry-run del plan de sincronizacion
-cargo run -- publish --name "Mi Set" --version 0.0.1 \
-  --base-url https://github.com/USER/REPO/releases/download/0.0.1/ --out ./pub   # (modder)
+cargo run -- publish --name "Mi Set" --version 0.0.1 --repo USER/REPO --out ./pub   # (modder)
+# El --repo se RECUERDA: la proxima vez podes omitirlo y sube OTRO release al MISMO repo.
 ```
 
 ## Build

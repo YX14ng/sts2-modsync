@@ -81,8 +81,10 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
 - GUI (mod manager): `cargo run --features gui` SIN argumentos (single-exe: el mismo binario
   `sts2-modsync` abre la GUI si no hay subcomandos). Pestañas Mods/Sync/Perfiles/Publicar.
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json>` (dry-run)
-  · `publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>] [--no-upload]`
-    (modder; por default SUBE al Release via `gh`, `--no-upload` solo genera local)
+  · `publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>] [--no-upload]`
+    (modder; por default SUBE al Release. El **`--repo` se RECUERDA** en `config.publish_repo`: la
+    proxima vez podes omitirlo y publica OTRO release en el MISMO repo —el GUI deriva el `base_url`
+    del repo recordado—. `--base-url` sigue funcionando (legacy). `--no-upload` solo genera local)
   · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
   · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma)
   · `github-login <token>` / `github-status` / `github-logout` (token de GitHub guardado SEGURO en el

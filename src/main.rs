@@ -306,12 +306,37 @@ fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
     Ok(())
 }
 
-/// `publish --name <set> --version <ver> --base-url <url> [--profile <p>] [--out <dir>]`
+/// `publish --name <set> --version <ver> (--repo <owner/repo> | --base-url <url>) [--profile <p>] [--out <dir>]`
+/// El `--repo` se RECUERDA: la proxima vez podes omitirlo y publica otro release en el mismo repo.
 fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
+    use sts2_modsync::github;
     let name = flag(args, "--name").context("falta --name")?;
     let version = flag(args, "--version").context("falta --version")?;
-    let base_url = flag(args, "--base-url").context("falta --base-url")?;
     let out = flag(args, "--out").unwrap_or("./set-publish");
+
+    // Resolver base_url + repo: --base-url explicito, o --repo, o el repo RECORDADO de antes.
+    let mut cfg = config::load();
+    let (base_url, repo, set_version) = if let Some(b) = flag(args, "--base-url") {
+        (
+            b.to_string(),
+            github::parse_release_base_url(b).map(|(o, r, _)| format!("{o}/{r}")),
+            version.trim().to_string(),
+        )
+    } else {
+        let repo_in = flag(args, "--repo")
+            .map(str::to_string)
+            .or_else(|| cfg.publish_repo.clone())
+            .context("falta --repo o --base-url (o un repo recordado de un publish anterior)")?;
+        let repo = github::normalize_repo(&repo_in)
+            .with_context(|| format!("repo invalido: {repo_in:?} (usa usuario/repo)"))?;
+        let tag = github::valid_tag(version).with_context(|| {
+            format!("version/tag invalido: {version:?} (sin espacios, '/' ni caracteres raros; ej v1.2.3)")
+        })?;
+        // El tag validado va a base_url Y a set_version (no la version cruda: evita que whitespace/
+        // CRLF de los extremos termine en el set_version del manifest FIRMADO).
+        (github::release_base_url(&repo, &tag), Some(repo), tag)
+    };
+    let base_url = base_url.as_str();
 
     let mods = modlist::scan(install)?;
     let ids: BTreeSet<String> = match flag(args, "--profile") {
@@ -332,6 +357,13 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         bail!("no hay mods para publicar (habilita algunos o pasa --profile)");
     }
 
+    // RECORDAR el repo + nombre: la proxima vez `publish` sin --repo/--base-url reusa este repo.
+    if let Some(r) = &repo {
+        cfg.publish_repo = Some(r.clone());
+        cfg.publish_set_name = Some(name.to_string());
+        let _ = config::save(&cfg);
+    }
+
     for w in publish::warnings(&ids) {
         println!("[!] {w}");
     }
@@ -341,7 +373,7 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
     );
     let params = publish::PublishParams {
         set_name: name.to_string(),
-        set_version: version.to_string(),
+        set_version,
         base_url: base_url.to_string(),
         published_at: String::new(),
         baselib_version: None,
@@ -547,8 +579,15 @@ fn print_help() {
     println!("  disable <id>          deshabilita un mod (a mods_disabled/)");
     println!("  launch                lanza el juego");
     println!("  sync    <set.json>    dry-run del plan de sincronizacion de un set");
-    println!("  publish --name <s> --version <v> --base-url <url> [--profile <p>] [--out <dir>]");
-    println!("                        genera un set-manifest + assets desde tus mods (modder)");
+    println!(
+        "  publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>]"
+    );
+    println!(
+        "                        genera + sube un set desde tus mods (modder); el --repo se RECUERDA"
+    );
+    println!(
+        "                        (la proxima vez podes omitirlo: sube OTRO release al mismo repo)"
+    );
     println!("  update                chequea GitHub y actualiza la app si hay version nueva");
     println!("  keygen                genera el par de claves minisign del modder (firma sets)");
     println!(

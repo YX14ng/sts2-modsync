@@ -3,6 +3,22 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.4.0] - 2026-06-14 — Recordar el repo de publicacion (no recrear repos)
+
+- La app **RECUERDA el repositorio** donde publicaste tus mods (`config.publish_repo`): "actualizar
+  la lista de mods" ahora es **subir OTRO release al MISMO repo**, no crear un repo nuevo cada vez.
+- GUI (pestaña Publicar): el campo crudo `base_url` se reemplazo por **"Repositorio:" (usuario/repo)**,
+  pre-cargado con lo ultimo que publicaste; un hint dinamico muestra exactamente a donde va
+  (`→ release '<tag>' en github.com/<owner>/<repo>`) y avisa que actualizar = otro release, no otro repo.
+- CLI: `publish` acepta **`--repo <owner/repo>`** (ademas del `--base-url` legacy) y, si lo omitis,
+  reusa el repo recordado. El `base_url` de descarga se deriva siempre como `https://...` (no hay
+  forma de degradar a `http://`). El nombre del set tambien se recuerda para pre-cargar el form.
+- **Saneo del input** (`github::normalize_repo` / `github::valid_tag`): el repo se normaliza
+  (saca `?query`/`#fragment` de una URL pegada, trimea, valida el charset real de GitHub) y la
+  version/tag se valida (sin espacios, sin `/`, sin `..`, charset seguro) ANTES de armar el
+  `base_url`. Esto evita que basura termine en el `base_url` que queda firmado dentro del
+  set-manifest que bajan los amigos, o que un tag con `/` rompa el round-trip y de 404.
+
 ## [1.3.0] - 2026-06-14 — Firma minisign opcional para sets (post-1.0 #3)
 
 - La **firma minisign de un set-manifest ya NO es obligatoria** (`signing::verify_optional`): el
