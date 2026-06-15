@@ -33,6 +33,15 @@ pub fn canonical_order(ids: impl IntoIterator<Item = String>) -> Vec<String> {
     ids
 }
 
+/// Segmento de carpeta SIMPLE y seguro: no vacio, sin separadores (`/` `\`), sin `:`, y distinto de
+/// `.`/`..`. Punto UNICO del invariante de path-traversal (CLAUDE.md): lo comparten `manager::safe_id`
+/// (id de mod al mover carpetas), `validate_ids` (ids del manifest) y `profile::name_is_safe` (nombre
+/// de perfil = nombre de archivo). Endurecerlo (control-chars, nombres reservados de Windows) se hace
+/// aca y los tres lo heredan.
+pub(crate) fn is_simple_segment(s: &str) -> bool {
+    !s.is_empty() && !s.contains(['/', '\\', ':']) && s != ".." && s != "."
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetManifest {
     /// Version del esquema; debe ser <= SCHEMA_VERSION.
@@ -154,15 +163,8 @@ impl SetManifest {
     /// mod con `files: []` evade `validate_paths`, que solo mira `files[].path`.)
     fn validate_ids(&self) -> Result<()> {
         for m in &self.mods {
-            let id = &m.id;
-            if id.is_empty()
-                || id.contains('/')
-                || id.contains('\\')
-                || id.contains(':')
-                || id == ".."
-                || id == "."
-            {
-                bail!("id de mod invalido en el manifiesto: {id:?}");
+            if !is_simple_segment(&m.id) {
+                bail!("id de mod invalido en el manifiesto: {:?}", m.id);
             }
         }
         Ok(())

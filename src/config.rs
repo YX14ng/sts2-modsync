@@ -107,6 +107,13 @@ pub fn config_path() -> Option<PathBuf> {
     Some(project_dirs()?.config_dir().join("config.toml"))
 }
 
+/// Directorio de datos de la app (`%APPDATA%/sts2-modsync/...`), junto al `config.toml`. Punto UNICO
+/// de "donde viven los datos": el cache de hashes, el log, los perfiles y la clave de firma cuelgan
+/// de aca (cada uno hace `data_dir()?.join("<archivo>")`).
+pub fn data_dir() -> Option<PathBuf> {
+    Some(config_path()?.parent()?.to_path_buf())
+}
+
 pub fn load() -> Config {
     match config_path() {
         Some(p) => load_from(&p),

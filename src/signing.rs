@@ -114,7 +114,7 @@ pub fn sign(secret_key_box: &str, data: &[u8]) -> Result<String> {
 
 /// Ruta del archivo de clave secreta del modder (fuera del repo): `%APPDATA%/.../minisign.key`.
 pub fn secret_key_path() -> Option<PathBuf> {
-    Some(crate::config::config_path()?.parent()?.join("minisign.key"))
+    Some(crate::config::data_dir()?.join("minisign.key"))
 }
 
 /// Lee la clave secreta del modder, si existe.

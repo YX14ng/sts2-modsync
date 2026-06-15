@@ -19,15 +19,9 @@ fn ensure_game_closed() -> Result<()> {
 }
 
 /// Valida que `id` sea un nombre de carpeta simple (sin separadores, `..` ni absolutas):
-/// cierra path-traversal al construir rutas destino (mismo criterio que `validate_paths`).
+/// cierra path-traversal al construir rutas destino. Comparte el predicado con el manifest.
 fn safe_id(id: &str) -> Result<&str> {
-    if id.is_empty()
-        || id.contains('/')
-        || id.contains('\\')
-        || id.contains(':')
-        || id == ".."
-        || id == "."
-    {
+    if !crate::manifest::is_simple_segment(id) {
         bail!("id de mod invalido: {id:?}");
     }
     Ok(id)

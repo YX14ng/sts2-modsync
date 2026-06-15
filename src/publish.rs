@@ -302,23 +302,6 @@ pub fn write_out(prep: &Prepared, out_dir: &Path) -> Result<PathBuf> {
     Ok(manifest_path)
 }
 
-/// Deriva (owner, repo, tag) de un `base_url` de release de GitHub:
-/// `https://github.com/<owner>/<repo>/releases/download/<tag>/`.
-fn parse_github_release(base_url: &str) -> Option<(String, String, String)> {
-    let rest = base_url.trim().strip_prefix("https://github.com/")?;
-    let parts: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
-    // owner / repo / releases / download / tag
-    if parts.len() >= 5 && parts[2] == "releases" && parts[3] == "download" {
-        Some((
-            parts[0].to_string(),
-            parts[1].to_string(),
-            parts[4].to_string(),
-        ))
-    } else {
-        None
-    }
-}
-
 fn run_gh(args: &[&str]) -> Result<std::process::Output> {
     std::process::Command::new("gh")
         .args(args)
@@ -357,7 +340,7 @@ fn upload_via_api(out_dir: &Path, base_url: &str, token: &str) -> Result<String>
 
 /// Sube via el `gh` CLI (fallback si no hay token guardado). Devuelve la URL del release.
 fn upload_via_gh(out_dir: &Path, base_url: &str) -> Result<String> {
-    let (owner, repo, tag) = parse_github_release(base_url).context(
+    let (owner, repo, tag) = crate::github::parse_release_base_url(base_url).context(
         "el base_url no es una URL de release de GitHub \
          (https://github.com/<owner>/<repo>/releases/download/<tag>/) — subi a mano",
     )?;

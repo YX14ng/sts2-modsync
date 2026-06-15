@@ -151,11 +151,7 @@ impl HashCache {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    Some(
-        crate::config::config_path()?
-            .parent()?
-            .join("hashcache.json"),
-    )
+    Some(crate::config::data_dir()?.join("hashcache.json"))
 }
 
 fn mtime_ns(meta: &std::fs::Metadata) -> u128 {

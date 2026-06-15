@@ -6,7 +6,6 @@
 //! (`is_valid_install`), nunca por el nombre.
 
 use crate::STS2_STEAM_APPID;
-use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// Ejecutable y carpeta de datos que delatan un install valido de StS2.
@@ -102,14 +101,6 @@ pub fn read_version(root: &Path) -> Option<String> {
     let txt = std::fs::read_to_string(root.join("release_info.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
     v.get("version")?.as_str().map(str::to_string)
-}
-
-/// Crea `<root>/mods` si falta (las copias pirata recien instaladas pueden no tenerla).
-pub fn ensure_mods_dir(install: &Install) -> Result<()> {
-    if !install.mods_dir.is_dir() {
-        std::fs::create_dir_all(&install.mods_dir)?;
-    }
-    Ok(())
 }
 
 /// True si el proceso del juego esta corriendo (sus .dll/.pck quedan lockeados en

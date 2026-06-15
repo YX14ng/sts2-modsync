@@ -4,7 +4,6 @@
 //! (sus `managed_ids`). Se guardan en `%APPDATA%/sts2-modsync/.../profiles/<name>.json`.
 
 use crate::detect::Install;
-use crate::manifest::SetManifest;
 use crate::{config, manager, modlist};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -30,28 +29,16 @@ impl Profile {
                 .collect(),
         }
     }
-
-    /// Perfil a partir de un set-manifest de la sync (sus mods gestionados).
-    pub fn from_set_manifest(name: &str, set: &SetManifest) -> Self {
-        Profile {
-            name: name.to_string(),
-            enabled_ids: set.managed_ids().into_iter().collect(),
-        }
-    }
 }
 
 /// Directorio de perfiles, junto al `config.toml`.
 fn profiles_dir() -> Option<PathBuf> {
-    Some(config::config_path()?.parent()?.join("profiles"))
+    Some(config::data_dir()?.join("profiles"))
 }
 
 fn name_is_safe(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains(':')
-        && name != ".."
-        && name != "."
+    // El nombre de perfil es un nombre de archivo: mismo invariante de path-traversal que el manifest.
+    crate::manifest::is_simple_segment(name)
 }
 
 pub fn save(profile: &Profile) -> Result<()> {

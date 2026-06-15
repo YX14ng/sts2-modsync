@@ -11,11 +11,7 @@ const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
 /// Archivo de log: junto a la config, en `%APPDATA%/sts2-modsync/sts2-modsync.log`.
 pub fn log_path() -> Option<PathBuf> {
-    Some(
-        crate::config::config_path()?
-            .parent()?
-            .join("sts2-modsync.log"),
-    )
+    Some(crate::config::data_dir()?.join("sts2-modsync.log"))
 }
 
 /// Inicializa el logging: rota si crecio mucho, instala el panic-hook y deja una linea de
