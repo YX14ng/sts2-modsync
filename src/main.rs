@@ -537,9 +537,11 @@ fn cmd_mod_check(install: &detect::Install, args: &[String]) -> Result<()> {
                 match sts2_modsync::nexus::check(game, *mod_id, m.manifest.version.as_deref()) {
                     Ok(Some(u)) => {
                         println!(
-                            "  [{}] Nexus v? -> v{} — descarga auto: fase 2b; abri {}",
+                            "  [{}] Nexus -> v{} — `mod-update {}` (Premium) o \"Mod Manager \
+                             Download\" en {}",
                             m.id(),
                             u.latest,
+                            m.id(),
                             src.web_url()
                         );
                         found += 1;
@@ -568,35 +570,48 @@ fn cmd_mod_update(install: &detect::Install, args: &[String]) -> Result<()> {
     let src = modupdate::effective_source(m, &cfg).with_context(|| {
         format!("{id} no tiene origen (usa: mod-source {id} <usuario/repo|URL>)")
     })?;
-    let ModSource::GitHub { owner, repo } = &src else {
-        bail!(
-            "{id} es de Nexus ({}): la descarga auto es la fase 2b (handler nxm://); abri {}",
-            src.label(),
-            src.web_url()
-        );
-    };
-    let upd = modupdate::check_github(
-        owner,
-        repo,
-        id,
-        m.manifest.version.as_deref(),
-        cfg.mod_installed_tag.get(id).map(String::as_str),
-        cfg.prefer_beta,
-    )?
-    .with_context(|| {
+    let current = m.manifest.version.as_deref();
+    let installed_tag = cfg.mod_installed_tag.get(id).map(String::as_str);
+    let al_dia = || {
         format!(
             "{id} ya esta en la ultima version ({})",
-            m.manifest.version.as_deref().unwrap_or("?")
+            current.unwrap_or("?")
         )
-    })?;
-    println!(
-        "actualizando {id}: v{} -> v{} ({})...",
-        upd.current.as_deref().unwrap_or("?"),
-        upd.latest,
-        chan_label(upd.prerelease)
-    );
-    modupdate::apply(install, id, &upd.asset_url, &upd.tag)?;
-    println!("listo: {id} v{}", upd.latest);
+    };
+    match &src {
+        ModSource::GitHub { owner, repo } => {
+            let upd =
+                modupdate::check_github(owner, repo, id, current, installed_tag, cfg.prefer_beta)?
+                    .with_context(al_dia)?;
+            println!(
+                "actualizando {id}: v{} -> v{} ({})...",
+                upd.current.as_deref().unwrap_or("?"),
+                upd.latest,
+                chan_label(upd.prerelease)
+            );
+            modupdate::apply(install, id, &upd.asset_url, &upd.tag)?;
+            println!("listo: {id} v{}", upd.latest);
+        }
+        ModSource::Nexus { game, mod_id } => {
+            // Premium: descarga DIRECTA (resuelve el archivo MAIN). Free: hay que usar el handler nxm://.
+            let premium = sts2_modsync::nexus::validate()
+                .map(|u| u.is_premium)
+                .unwrap_or(false);
+            let upd = modupdate::check_nexus(id, game, *mod_id, current, installed_tag, premium)?
+                .with_context(al_dia)?;
+            let Some(nref) = &upd.nexus else {
+                bail!(
+                    "{id} es de Nexus ({}) y tu cuenta no es Premium: usa \"Mod Manager Download\" \
+                     en Nexus (handler nxm://) o conecta una cuenta Premium con nexus-login. Abri {}",
+                    src.label(),
+                    src.web_url()
+                );
+            };
+            println!("actualizando {id} desde Nexus -> v{}...", upd.latest);
+            modupdate::apply_nexus(install, id, nref, &upd.latest)?;
+            println!("listo: {id} v{}", upd.latest);
+        }
+    }
     Ok(())
 }
 

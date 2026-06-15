@@ -59,6 +59,8 @@ impl App {
                     .desired_width(300.0),
             );
         });
+        // Si hay sesion de GitHub: elegir un repo existente o crear uno, sin tipearlo a mano.
+        self.ui_gh_repo_picker(ui, ctx);
         ui.horizontal(|ui| {
             ui.label("Version (= tag del release):");
             ui.add(egui::TextEdit::singleline(&mut self.pub_version).desired_width(160.0));

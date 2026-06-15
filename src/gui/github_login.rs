@@ -15,6 +15,13 @@ pub(super) enum GhEvent {
     Failed(String),
 }
 
+/// Eventos del worker de repos de GitHub (listar los que podes pushear, o crear uno nuevo).
+pub(super) enum GhRepoEvent {
+    Listed(Vec<String>),
+    Created(String), // "owner/repo" del repo creado/reusado
+    Failed(String),
+}
+
 impl App {
     /// Valida UNA vez el token guardado en el llavero (whoami -> gh_user). Best-effort.
     pub(super) fn gh_check_stored(&mut self, ctx: &egui::Context) {
@@ -164,6 +171,147 @@ impl App {
             Err(TryRecvError::Empty) => ctx.request_repaint(),
             Err(TryRecvError::Disconnected) => self.gh_job = None,
         }
+    }
+
+    /// Lista en un hilo los repos donde el usuario puede pushear (para elegir uno de publicacion).
+    fn gh_load_repos(&mut self, ctx: &egui::Context) {
+        if self.gh_repo_job.is_some() {
+            return;
+        }
+        let Some(token) = crate::github::load_token() else {
+            self.show_toast("conecta GitHub primero", true);
+            return;
+        };
+        let (tx, rx) = channel();
+        self.gh_repo_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let ev = match crate::github::Api::new(token).list_repos() {
+                Ok(repos) => GhRepoEvent::Listed(repos),
+                Err(e) => GhRepoEvent::Failed(format!("{e:#}")),
+            };
+            let _ = tx.send(ev);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Crea en un hilo un repo PUBLICO nuevo (`gh_new_repo`) y lo deja elegido como repo de publicacion.
+    fn gh_create_repo(&mut self, ctx: &egui::Context) {
+        if self.gh_repo_job.is_some() {
+            return;
+        }
+        let name = self.gh_new_repo.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let Some(token) = crate::github::load_token() else {
+            self.show_toast("conecta GitHub primero", true);
+            return;
+        };
+        let (tx, rx) = channel();
+        self.gh_repo_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let ev = match crate::github::Api::new(token).create_repo(&name) {
+                Ok(full) => GhRepoEvent::Created(full),
+                Err(e) => GhRepoEvent::Failed(format!("{e:#}")),
+            };
+            let _ = tx.send(ev);
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_gh_repo_job(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.gh_repo_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(GhRepoEvent::Listed(repos)) => {
+                self.gh_repos = repos;
+                self.gh_repo_job = None;
+            }
+            Ok(GhRepoEvent::Created(full)) => {
+                self.gh_repo_job = None;
+                self.gh_new_repo.clear();
+                if !self.gh_repos.contains(&full) {
+                    self.gh_repos.insert(0, full.clone());
+                }
+                self.select_publish_repo(full.clone());
+                self.show_toast(format!("repo creado: {full}"), false);
+            }
+            Ok(GhRepoEvent::Failed(e)) => {
+                self.gh_repo_job = None;
+                self.show_toast(e, true);
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint(),
+            Err(TryRecvError::Disconnected) => self.gh_repo_job = None,
+        }
+    }
+
+    /// Fija el repo de publicacion y lo RECUERDA (config.publish_repo) — al elegir/crear uno, no hace
+    /// falta esperar a publicar para que quede guardado.
+    fn select_publish_repo(&mut self, repo: String) {
+        self.pub_repo = repo.clone();
+        self.cfg.publish_repo = Some(repo);
+        let _ = crate::config::save(&self.cfg);
+    }
+
+    /// Elegir un repo existente (combo) o crear uno nuevo, sin tipear `owner/repo` a mano. Solo si
+    /// hay sesion de GitHub (sino el campo de texto de la pestaña Publicar sigue sirviendo).
+    pub(super) fn ui_gh_repo_picker(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if self.gh_user.is_none() && !crate::github::is_connected() {
+            return;
+        }
+        let busy = self.gh_repo_job.is_some();
+        ui.horizontal(|ui| {
+            ui.label("Mis repos:");
+            let mut chosen: Option<String> = None;
+            egui::ComboBox::from_id_salt("gh_repo_combo")
+                .selected_text(if self.pub_repo.is_empty() {
+                    "elegir...".to_string()
+                } else {
+                    self.pub_repo.clone()
+                })
+                .show_ui(ui, |ui| {
+                    if self.gh_repos.is_empty() {
+                        ui.label(egui::RichText::new("(toca \"Cargar\")").weak());
+                    }
+                    for r in &self.gh_repos {
+                        if ui.selectable_label(&self.pub_repo == r, r).clicked() {
+                            chosen = Some(r.clone());
+                        }
+                    }
+                });
+            if let Some(r) = chosen {
+                self.select_publish_repo(r);
+            }
+            if ui
+                .add_enabled(!busy, egui::Button::new("Cargar"))
+                .on_hover_text("Lista tus repos de GitHub (los que podes pushear).")
+                .clicked()
+            {
+                self.gh_load_repos(ctx);
+            }
+            if busy {
+                ui.spinner();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("o crear repo:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.gh_new_repo)
+                    .hint_text("nombre-del-repo")
+                    .desired_width(200.0),
+            );
+            let can = !busy && !self.gh_new_repo.trim().is_empty();
+            if ui
+                .add_enabled(can, egui::Button::new("Crear (publico)"))
+                .on_hover_text("Crea un repo PUBLICO nuevo bajo tu cuenta y lo deja elegido.")
+                .clicked()
+            {
+                self.gh_create_repo(ctx);
+            }
+        });
     }
 
     /// Card "Conectar con GitHub" en la pestaña Publicar.

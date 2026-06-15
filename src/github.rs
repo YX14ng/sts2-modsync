@@ -189,6 +189,86 @@ impl Api {
         Ok(u.login)
     }
 
+    /// Repos donde el usuario puede PUSHEAR (para publicar): full_name `"owner/repo"`. Pagina
+    /// `GET /user/repos` filtrando por permiso de push (un repo sin push no sirve para subir el
+    /// release). Ordenados por actividad reciente.
+    pub fn list_repos(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Perm {
+            #[serde(default)]
+            push: bool,
+        }
+        #[derive(Deserialize)]
+        struct Repo {
+            full_name: String,
+            #[serde(default)]
+            permissions: Option<Perm>,
+        }
+        let mut out = Vec::new();
+        for page in 1.. {
+            let repos: Vec<Repo> = self
+                .req(
+                    reqwest::Method::GET,
+                    &format!(
+                        "https://api.github.com/user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member"
+                    ),
+                )
+                .send()
+                .context("GET /user/repos")?
+                .error_for_status()
+                .context("listando tus repos")?
+                .json()
+                .context("parseando /user/repos")?;
+            if repos.is_empty() {
+                break;
+            }
+            let n = repos.len();
+            out.extend(
+                repos
+                    .into_iter()
+                    .filter(|r| r.permissions.as_ref().is_some_and(|p| p.push))
+                    .map(|r| r.full_name),
+            );
+            if n < 100 {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Crea un repo PUBLICO bajo el usuario autenticado y devuelve su `"owner/repo"`. Si ya existe
+    /// (422), arma el `owner/repo` con el login. Valida el nombre antes (charset de repo de GitHub).
+    pub fn create_repo(&self, name: &str) -> Result<String> {
+        let name = name.trim();
+        if !valid_repo(name) {
+            bail!("nombre de repo invalido: {name:?} (usa letras/numeros/._- y sin espacios)");
+        }
+        #[derive(Deserialize)]
+        struct Created {
+            full_name: String,
+        }
+        let resp = self
+            .req(reqwest::Method::POST, "https://api.github.com/user/repos")
+            .json(&serde_json::json!({ "name": name, "private": false, "auto_init": true }))
+            .send()
+            .context("POST /user/repos")?;
+        match resp.status().as_u16() {
+            201 => Ok(resp
+                .json::<Created>()
+                .context("parseando el repo creado")?
+                .full_name),
+            422 => {
+                // Ya existia bajo el usuario: armar owner/repo con el login (lo reusamos para publicar).
+                let login = self.whoami()?;
+                Ok(format!("{login}/{name}"))
+            }
+            code => {
+                let body = resp.text().unwrap_or_default();
+                bail!("no se pudo crear el repo {name:?} (HTTP {code}): {body}");
+            }
+        }
+    }
+
     /// Crea el repo PUBLICO bajo el usuario autenticado si no existe (422 = ya existe -> ok).
     /// Para un repo de una ORG, crealo a mano: igual subimos al release si ya existe.
     pub fn ensure_repo(&self, name: &str) -> Result<()> {

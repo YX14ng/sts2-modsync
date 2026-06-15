@@ -23,7 +23,8 @@ use crate::modlist::{self, InstalledMod};
 use crate::profile::Profile;
 use crate::{config, launch, update};
 use eframe::egui;
-use github_login::GhEvent;
+use github_login::{GhEvent, GhRepoEvent};
+use mods_tab::NexusEvent;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -159,8 +160,10 @@ struct App {
     // la key; `nexus_job` = worker de validar+guardar (Ok(nombre) | Err).
     nexus_user: Option<String>,
     nexus_key_input: String,
-    nexus_job: Option<Receiver<Result<String, String>>>,
+    nexus_job: Option<Receiver<NexusEvent>>,
     nexus_connected: bool, // cache de `nexus::is_connected()` (evita leer el llavero cada frame)
+    nexus_premium: bool,   // cuenta Premium: habilita la descarga DIRECTA (sin handler nxm://)
+    nexus_checked: bool,   // ya validamos la key guardada (whoami -> nombre + premium), una vez
 
     // Accion en curso (enable/disable/install/uninstall/aplicar perfil): una a la vez.
     action_job: Option<Receiver<Result<String, String>>>,
@@ -191,6 +194,11 @@ struct App {
     gh_pat: String,          // input del token pegado
     gh_job: Option<Receiver<GhEvent>>, // worker de login (PAT o device-flow)
     gh_device: Option<(String, String)>, // (user_code, verification_uri) durante el device-flow
+    // Elegir/crear el repo de publicacion sin tipearlo: lista de repos donde podes pushear + el
+    // worker (listar o crear) + el nombre del repo nuevo a crear.
+    gh_repos: Vec<String>,
+    gh_repo_job: Option<Receiver<GhRepoEvent>>,
+    gh_new_repo: String,
 
     // Auto-update
     update_checked: bool,
@@ -243,6 +251,9 @@ impl App {
             gh_pat: String::new(),
             gh_job: None,
             gh_device: None,
+            gh_repos: Vec::new(),
+            gh_repo_job: None,
+            gh_new_repo: String::new(),
             update_checked: false,
             update_check_job: None,
             update_avail: None,
@@ -255,6 +266,8 @@ impl App {
             nexus_key_input: String::new(),
             nexus_job: None,
             nexus_connected: crate::nexus::is_connected(),
+            nexus_premium: false,
+            nexus_checked: false,
             dark_mode: true,
         };
         app.try_detect();
@@ -463,6 +476,7 @@ impl eframe::App for App {
         self.poll_mod_update(&ctx);
         self.poll_nexus_job();
         self.poll_gh_job(&ctx);
+        self.poll_gh_repo_job(&ctx);
         if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
             self.kick_scan(&ctx);
         }

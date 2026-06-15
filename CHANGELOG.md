@@ -3,6 +3,21 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.10.0] - 2026-06-15 — GitHub: elegir/crear repo con un clic · Nexus Premium: actualizar directo
+
+- **GitHub — elegir o crear el repo de publicacion sin tipearlo** (pestaña Publicar, con sesion de
+  GitHub iniciada): un combo lista tus repos (los que podes pushear) para elegir uno, y un campo
+  "crear repo" arma uno PUBLICO nuevo bajo tu cuenta. Lo elegido se recuerda (`config.publish_repo`)
+  al instante. Nuevo en la API: `github::Api::list_repos` (pagina `/user/repos`, filtra por push) y
+  `create_repo` (POST `/user/repos`, devuelve `owner/repo`; 422 = ya existia).
+- **Nexus Premium — actualizar mods DIRECTO** (sin el handler `nxm://`): si tu cuenta es Premium, al
+  buscar actualizacion de un mod de Nexus aparece "Actualizar (Premium)" que resuelve el archivo MAIN
+  (`nexus::latest_main_file`), baja el `.zip` por la API (`download_link` directo, sin `key/expires`)
+  e instala reemplazando (solo si el zip declara ese mismo id). Las cuentas gratis siguen con "Mod
+  Manager Download" (`nxm://`). La app valida la API key guardada al abrir para saber si sos Premium.
+- CLI: `mod-update <id>` ahora tambien actualiza mods de Nexus si la cuenta es Premium.
+- `.7z`/`.rar` de Nexus no se auto-instalan (se avisa para bajarlos a mano), igual que el flujo `nxm`.
+
 ## [1.9.0] - 2026-06-15 — Nexus: descarga automatica via handler nxm:// (auto-update fase 2b)
 
 - **Descarga automatica de mods de Nexus** (modulo `nxm`): se registra la app como handler del

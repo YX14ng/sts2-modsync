@@ -209,6 +209,68 @@ pub fn download_link(
         .context("Nexus no devolvio una URL de descarga")
 }
 
+/// Un archivo de un mod en Nexus (de `files.json`), para resolver cual bajar en Premium.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NexusFile {
+    pub file_id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    /// Categoria del archivo (1=MAIN, 2=UPDATE, 3=OPTIONAL, 4=OLD_VERSION, 6=DELETED, 7=ARCHIVED).
+    #[serde(default)]
+    category_id: Option<u64>,
+    #[serde(default)]
+    is_primary: bool,
+}
+
+#[derive(Deserialize)]
+struct FilesResp {
+    #[serde(default)]
+    files: Vec<NexusFile>,
+}
+
+/// El archivo MAIN/primario de un mod, para bajarlo directo (Premium). Prefiere el marcado
+/// `is_primary`, luego la categoria MAIN (id 1), luego el de mayor `file_id`; ignora versiones
+/// viejas/borradas/archivadas. `Ok(None)` si el mod no tiene un archivo instalable. Necesita la API
+/// key guardada.
+pub fn latest_main_file(game: &str, mod_id: u64) -> Result<Option<NexusFile>> {
+    let key = load_key().context("conecta tu API key de Nexus para resolver el archivo a bajar")?;
+    let url = format!("{API}/games/{game}/mods/{mod_id}/files.json");
+    let resp = get(&url, &key)?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("la API key de Nexus es invalida");
+    }
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        bail!("el mod {game}/{mod_id} no existe en Nexus");
+    }
+    let parsed: FilesResp = resp
+        .error_for_status()
+        .context("nexus api (files)")?
+        .json()
+        .context("parseando los archivos del mod de Nexus")?;
+    Ok(pick_main_file(&parsed.files).cloned())
+}
+
+/// Elige el archivo a bajar de la lista de un mod: `is_primary`, luego categoria MAIN (1), luego el
+/// de mayor `file_id`; ignora versiones viejas/borradas/archivadas (categorias 4/6/7). Helper PURO
+/// (testeable sin red) de [`latest_main_file`].
+fn pick_main_file(files: &[NexusFile]) -> Option<&NexusFile> {
+    // No instalables: OLD_VERSION (4), DELETED (6), ARCHIVED (7).
+    let usable = |f: &&NexusFile| !matches!(f.category_id, Some(4) | Some(6) | Some(7));
+    files
+        .iter()
+        .filter(usable)
+        .find(|f| f.is_primary)
+        .or_else(|| {
+            files
+                .iter()
+                .filter(usable)
+                .find(|f| f.category_id == Some(1))
+        })
+        .or_else(|| files.iter().filter(usable).max_by_key(|f| f.file_id))
+}
+
 /// "Hay una version distinta disponible" para versiones de Nexus, que son TEXTO LIBRE (ej "1.2",
 /// "v2", "Beta 3", "2024-05-01"). Si AMBAS son semver puro (`vX.Y.Z`), usa la comparacion numerica
 /// (`is_newer`, confiable y sin falsos positivos por "1.0" vs "1.0.0"). Si alguna NO lo es (fecha,
@@ -234,6 +296,38 @@ fn is_pure_semver(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn file(file_id: u64, category_id: Option<u64>, is_primary: bool) -> NexusFile {
+        NexusFile {
+            file_id,
+            name: String::new(),
+            version: String::new(),
+            category_id,
+            is_primary,
+        }
+    }
+
+    #[test]
+    fn pick_main_file_prioriza_primary_luego_main_luego_mayor_id() {
+        // is_primary gana aunque no sea el de mayor id ni categoria MAIN.
+        let fs = vec![
+            file(10, Some(1), false),
+            file(20, Some(3), true), // OPTIONAL pero primary
+        ];
+        assert_eq!(pick_main_file(&fs).unwrap().file_id, 20);
+        // sin primary: gana la categoria MAIN (1).
+        let fs = vec![file(30, Some(3), false), file(5, Some(1), false)];
+        assert_eq!(pick_main_file(&fs).unwrap().file_id, 5);
+        // sin primary ni MAIN: el de mayor file_id entre los instalables.
+        let fs = vec![file(7, Some(2), false), file(9, Some(5), false)];
+        assert_eq!(pick_main_file(&fs).unwrap().file_id, 9);
+        // ignora viejas/borradas/archivadas (4/6/7) aunque tengan id mayor.
+        let fs = vec![file(100, Some(4), false), file(8, Some(2), false)];
+        assert_eq!(pick_main_file(&fs).unwrap().file_id, 8);
+        // todo descartado / vacio -> None.
+        assert!(pick_main_file(&[]).is_none());
+        assert!(pick_main_file(&[file(1, Some(6), false)]).is_none());
+    }
 
     #[test]
     fn version_differs_semver_y_texto_libre() {

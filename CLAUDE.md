@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.9.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.10.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -44,6 +44,15 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   `nxm <link>` (lo invoca Windows al tocar "Mod Manager Download"): baja con `transport::download_capped`
   e instala el `.zip`; `.7z`/`.rar` se guardan a Descargas (no se extraen). Resultado en un dialogo (rfd).
   GUI: boton "Registrar Mod Manager Download (nxm://)".
+- **1.10.0:** **elegir/crear el repo de publicacion** y **actualizar mods de Nexus DIRECTO (Premium)**.
+  GitHub: `github::Api::list_repos` (pagina `/user/repos`, filtra por permiso de push) + `create_repo`
+  (POST `/user/repos`, devuelve `owner/repo`); el GUI (pestaña Publicar, con login) muestra un combo
+  para elegir y un campo para crear, y recuerda lo elegido al toque. Nexus Premium: `nexus::latest_main_file`
+  resuelve el archivo MAIN; `modupdate::check_nexus(.., premium)` mete un `NexusRef` en el `ModUpdate`
+  cuando la cuenta es Premium, y `modupdate::apply_nexus` baja por `download_link` directo (sin
+  `key/expires`) e instala con `install_update_zip` (valida id). El GUI valida la key al abrir para
+  saber si sos Premium y muestra "Actualizar (Premium)"; las cuentas gratis siguen con `nxm://`. CLI:
+  `mod-update <id>` ya actualiza mods de Nexus si la cuenta es Premium.
 
 Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): soporte `.7z` para
 los mods de Nexus, crear el repo de mods con un click, OAuth `OAUTH_CLIENT_ID` real, delta zstd, y

@@ -17,6 +17,16 @@ use anyhow::{Context, Result, bail};
 /// release-bomba). Holgado para mods con `.pck` grandes, pero acotado.
 const DOWNLOAD_MAX: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Coordenadas para bajar DIRECTO de Nexus (solo Premium): el archivo MAIN ya resuelto. Con esto,
+/// `apply_nexus` resuelve el download-link en el momento (es de vida corta) y baja+instala sin el
+/// flujo `nxm://`. `None` para GitHub o para Nexus gratis (que sigue por `nxm://`).
+#[derive(Debug, Clone)]
+pub struct NexusRef {
+    pub game: String,
+    pub mod_id: u64,
+    pub file_id: u64,
+}
+
 /// Una actualizacion disponible para un mod.
 #[derive(Debug, Clone)]
 pub struct ModUpdate {
@@ -28,10 +38,12 @@ pub struct ModUpdate {
     pub tag: String,
     /// `true` si la version disponible es un pre-release (canal BETA).
     pub prerelease: bool,
-    /// URL del `.zip` a bajar (asset del release, o el source zipball como fallback).
+    /// URL del `.zip` a bajar (asset del release, o el source zipball como fallback). VACIO en Nexus.
     pub asset_url: String,
     /// Pagina del release (para "Abrir").
     pub html_url: String,
+    /// Solo Nexus Premium: el archivo a bajar directo (`apply_nexus`). `None` = GitHub o Nexus gratis.
+    pub nexus: Option<NexusRef>,
 }
 
 /// Chequea si hay una version mas nueva de `mod_id` en GitHub. `current` = version del `<id>.json`
@@ -111,6 +123,7 @@ pub fn check_github(
         prerelease: pick.prerelease,
         asset_url: pick.asset_url,
         html_url: pick.html_url,
+        nexus: None,
     }))
 }
 
@@ -231,17 +244,39 @@ fn unique_suffix() -> u128 {
         .unwrap_or(0)
 }
 
-/// Chequeo de un mod cuyo origen es NEXUS (fase 2a: solo VERSION, la descarga automatica es 2b).
-/// Construye un `ModUpdate` con `asset_url` VACIO: la UI/CLI muestran "Abrir en Nexus" en vez de
-/// "Actualizar" (no hay descarga directa todavia). `nexus_mod_id` es el id del mod EN Nexus.
+/// Chequeo de un mod cuyo origen es NEXUS. Devuelve la version disponible; si el usuario es
+/// **Premium** (`premium`), ademas resuelve el archivo MAIN para poder bajarlo DIRECTO (`nexus:
+/// Some(..)` -> el GUI muestra "Actualizar"). Si NO es Premium, `nexus` queda `None` y la descarga
+/// va por el handler `nxm://`. `installed_tag` evita re-ofrecer una version ya instalada cuyo
+/// `<id>.json` no refleje el bump. `nexus_mod_id` es el id del mod EN Nexus.
 pub fn check_nexus(
     mod_id: &str,
     game: &str,
     nexus_mod_id: u64,
     current: Option<&str>,
+    installed_tag: Option<&str>,
+    premium: bool,
 ) -> Result<Option<ModUpdate>> {
     let Some(nx) = crate::nexus::check(game, nexus_mod_id, current)? else {
         return Ok(None);
+    };
+    // Ya instalamos exactamente esta version antes (cubre mods cuyo <id>.json no refleja el bump).
+    if installed_tag == Some(nx.latest.as_str()) {
+        return Ok(None);
+    }
+    // Premium: resolver el archivo MAIN para bajar directo. Free: queda None (flujo nxm://). Si la
+    // resolucion falla, no abortamos el chequeo: se cae al flujo nxm:// igual.
+    let nexus = if premium {
+        crate::nexus::latest_main_file(game, nexus_mod_id)
+            .ok()
+            .flatten()
+            .map(|f| NexusRef {
+                game: game.to_string(),
+                mod_id: nexus_mod_id,
+                file_id: f.file_id,
+            })
+    } else {
+        None
     };
     Ok(Some(ModUpdate {
         mod_id: mod_id.to_string(),
@@ -249,9 +284,59 @@ pub fn check_nexus(
         latest: nx.latest.clone(),
         tag: nx.latest,
         prerelease: false,
-        asset_url: String::new(), // Nexus: sin descarga directa en fase 2a
+        asset_url: String::new(), // Nexus: la descarga directa va por `nexus`/`apply_nexus`
         html_url: format!("https://www.nexusmods.com/{game}/mods/{nexus_mod_id}"),
+        nexus,
     }))
+}
+
+/// Aplica una actualizacion DIRECTA de Nexus (solo Premium): resuelve el download-link del archivo
+/// MAIN (de vida corta, por eso se resuelve recien aca), baja el `.zip` e instala REEMPLAZANDO
+/// `mod_id` (solo si el zip declara ese MISMO id, via `manager::install_update_zip`), preservando
+/// enable/disable y recordando la version. Formatos no-`.zip` (`.7z`/`.rar`) no se auto-instalan: se
+/// avisa para bajarlos a mano. Exige el juego cerrado (lo verifica `manager`).
+pub fn apply_nexus(install: &Install, mod_id: &str, nref: &NexusRef, version: &str) -> Result<()> {
+    // Premium: download-link directo (sin key/expires de un solo uso).
+    let url = crate::nexus::download_link(&nref.game, nref.mod_id, nref.file_id, None, None)?;
+    if !url_looks_zip(&url) {
+        bail!(
+            "el archivo de Nexus no es un .zip y no se puede auto-instalar. Bajalo desde la pagina \
+             del mod y usa 'Instalar .zip' (pestaña Mods)."
+        );
+    }
+    // HTTPS lo exige `download_capped` (require_https + cliente https-only); no hace falta repetirlo.
+    let was_disabled = manager::mod_dir(install, mod_id)
+        .is_some_and(|d| d.starts_with(modlist::disabled_dir(install)));
+
+    let tmp = std::env::temp_dir().join(format!("sts2_nexusupd_{}.zip", unique_suffix()));
+    let res = (|| {
+        transport::download_capped(&url, &tmp, DOWNLOAD_MAX)?;
+        manager::install_update_zip(install, &tmp, mod_id)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    res?;
+
+    if was_disabled {
+        manager::disable(install, mod_id)
+            .with_context(|| format!("re-deshabilitando {mod_id} tras actualizar"))?;
+    }
+    let mut cfg = config::load();
+    cfg.mod_installed_tag
+        .insert(mod_id.to_string(), version.to_string());
+    let _ = config::save(&cfg);
+    Ok(())
+}
+
+/// `true` si el ultimo segmento del path de `url` (sin query/fragment) termina en `.zip`.
+fn url_looks_zip(url: &str) -> bool {
+    url.split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .rsplit_once('.')
+        .is_some_and(|(_, e)| e.eq_ignore_ascii_case("zip"))
 }
 
 /// El origen efectivo de un mod: el override del usuario en `config.mod_sources` (prioridad) o el
@@ -301,6 +386,17 @@ mod tests {
         let beta = pick_release(&arr, "Mod", true).unwrap();
         assert_eq!(beta.tag, "v2.0.0-beta");
         assert!(beta.prerelease);
+    }
+
+    #[test]
+    fn url_looks_zip_solo_por_la_extension_del_ultimo_segmento() {
+        assert!(url_looks_zip(
+            "https://cdn.nexus/files/Mod-1.2.zip?md5=x&expires=9"
+        ));
+        assert!(url_looks_zip("https://cdn/a/b/Mod.ZIP")); // case-insensitive
+        assert!(!url_looks_zip("https://cdn/files/Mod-1.2.7z?md5=x"));
+        assert!(!url_looks_zip("https://cdn/files/Mod.rar"));
+        assert!(!url_looks_zip("https://cdn/zip/Mod")); // 'zip' en el path, no en la extension
     }
 
     #[test]

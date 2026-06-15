@@ -274,7 +274,12 @@ pub fn require_https(url: &str) -> Result<()> {
     if let Some(rest) = lower.strip_prefix("http://")
         && !is_loopback_host(rest)
     {
-        bail!("URL insegura (http://): se exige HTTPS — {url}");
+        // `redact_url`: una URL firmada (CDN de Nexus, `?md5=..&expires=..`) NO debe filtrar la query
+        // al error/dialogo. Para las demas (sin query) es inocuo.
+        bail!(
+            "URL insegura (http://): se exige HTTPS — {}",
+            redact_url(url)
+        );
     }
     Ok(())
 }
@@ -363,6 +368,13 @@ mod tests {
         assert!(require_https("http://[::1]:9/a").is_ok());
         assert!(require_https("http://127.0.0.1.evil.com/a").is_err());
         assert!(require_https("http://localhost.evil.com/a").is_err());
+        // El error de un http:// firmado (CDN de Nexus) NO filtra la query (token de un solo uso).
+        let e = require_https("http://cdn.evil/file.zip?md5=SECRET&expires=9").unwrap_err();
+        let msg = format!("{e}");
+        assert!(
+            !msg.contains("SECRET") && !msg.contains("md5="),
+            "require_https no debe filtrar la query firmada: {msg}"
+        );
     }
 
     /// Mock loopback: verifica que `GitHubReleases::fetch` baja entero (200) y REANUDA con

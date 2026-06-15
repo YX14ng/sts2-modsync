@@ -8,12 +8,29 @@ use crate::{manager, modlist};
 use eframe::egui;
 use std::sync::mpsc::{TryRecvError, channel};
 
+/// Resultado del worker de Nexus (conectar la key, o validar la guardada al arrancar). `announce`
+/// distingue una conexion EXPLICITA del usuario (toast en exito/error) de la validacion silenciosa
+/// de arranque (no molestar con un toast si hay un blip de red).
+pub(super) enum NexusEvent {
+    Connected {
+        name: String,
+        premium: bool,
+        announce: bool,
+    },
+    Failed {
+        msg: String,
+        announce: bool,
+    },
+}
+
 impl App {
     pub(super) fn ui_mods(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.install.is_none() {
             ui.label("Detecta o elegi la carpeta del juego (arriba) para ver los mods.");
             return;
         }
+        // Validar una vez la key de Nexus guardada (saber si la cuenta es Premium -> descarga directa).
+        self.nexus_check_stored(ctx);
 
         let mut pick_dir = false;
         let mut pick_zip = false;
@@ -359,7 +376,7 @@ impl App {
                     }
                 }
             } else {
-                // Nexus: chequeo de version via API (fase 2a); la descarga auto (handler nxm://) es 2b.
+                // Nexus: chequeo de version via API. Premium -> descarga DIRECTA; gratis -> nxm://.
                 if self.nexus_connected {
                     ui.horizontal(|ui| {
                         let checking = self.mod_update_job.is_some();
@@ -373,13 +390,14 @@ impl App {
                             ui.spinner();
                         }
                         if let Some(name) = &self.nexus_user {
-                            ui.label(egui::RichText::new(format!("Nexus: {name}")).weak());
+                            let tag = if self.nexus_premium { " (Premium)" } else { "" };
+                            ui.label(egui::RichText::new(format!("Nexus: {name}{tag}")).weak());
                         }
                         if ui.small_button("desconectar").clicked() {
                             self.nexus_disconnect();
                         }
                     });
-                    if let Some(upd) = self.mod_updates.get(&id) {
+                    if let Some(upd) = self.mod_updates.get(&id).cloned() {
                         ui.colored_label(
                             ACCENT,
                             format!(
@@ -388,13 +406,31 @@ impl App {
                                 upd.current.as_deref().unwrap_or("?")
                             ),
                         );
+                        if upd.nexus.is_some() {
+                            // Premium: descarga e instalacion directa (sin handler nxm://).
+                            if ui
+                                .add_enabled(can_act, egui::Button::new("Actualizar (Premium)"))
+                                .clicked()
+                            {
+                                self.apply_nexus_update(ctx, id.clone(), upd);
+                            } else if !can_act && self.game_running {
+                                ui.colored_label(WARN, "Cerra Slay the Spire 2 para actualizar.");
+                            }
+                        } else {
+                            // Cuenta gratis: la descarga directa no aplica -> "Mod Manager Download" o a mano.
+                            ui.horizontal(|ui| {
+                                ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
+                                ui.label(
+                                    egui::RichText::new(
+                                        "(cuenta gratis: usa \"Mod Manager Download\" en Nexus, o conecta una Premium)",
+                                    )
+                                    .weak(),
+                                );
+                            });
+                        }
+                    } else {
+                        ui.hyperlink_to("Abrir en Nexus", src.web_url());
                     }
-                    ui.horizontal(|ui| {
-                        ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
-                        ui.label(
-                            egui::RichText::new("(descarga automatica de Nexus: fase 2b)").weak(),
-                        );
-                    });
                 } else {
                     // Sin API key: pegar para conectar y poder chequear versiones de Nexus.
                     ui.label(
@@ -532,6 +568,7 @@ impl App {
             .and_then(|m| m.manifest.version.clone());
         let installed_tag = self.cfg.mod_installed_tag.get(&id).cloned();
         let prefer_beta = self.cfg.prefer_beta;
+        let premium = self.nexus_premium;
         let (tx, rx) = channel();
         self.mod_update_job = Some(rx);
         let ctx = ctx.clone();
@@ -545,9 +582,14 @@ impl App {
                     installed_tag.as_deref(),
                     prefer_beta,
                 ),
-                ModSource::Nexus { game, mod_id } => {
-                    crate::modupdate::check_nexus(&id, &game, mod_id, current.as_deref())
-                }
+                ModSource::Nexus { game, mod_id } => crate::modupdate::check_nexus(
+                    &id,
+                    &game,
+                    mod_id,
+                    current.as_deref(),
+                    installed_tag.as_deref(),
+                    premium,
+                ),
             }
             .map_err(|e| format!("{e:#}"));
             let _ = tx.send((id, res));
@@ -555,7 +597,38 @@ impl App {
         });
     }
 
-    /// Conecta la API Key de Nexus: la guarda en el llavero y la valida en un hilo.
+    /// Valida UNA vez la API key guardada (whoami -> nombre + Premium). Best-effort y SILENCIOSO: si
+    /// falla (blip de red), no molesta con un toast y deja la key guardada. Asi al abrir la app ya
+    /// sabemos si la cuenta es Premium (habilita la descarga directa).
+    pub(super) fn nexus_check_stored(&mut self, ctx: &egui::Context) {
+        if self.nexus_checked || self.nexus_job.is_some() {
+            return;
+        }
+        self.nexus_checked = true;
+        if !crate::nexus::is_connected() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.nexus_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let ev = match crate::nexus::validate() {
+                Ok(u) => NexusEvent::Connected {
+                    name: u.name,
+                    premium: u.is_premium,
+                    announce: false,
+                },
+                Err(e) => NexusEvent::Failed {
+                    msg: format!("{e:#}"),
+                    announce: false,
+                },
+            };
+            let _ = tx.send(ev);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Conecta la API Key de Nexus: la guarda en el llavero y la valida en un hilo (toast al terminar).
     fn nexus_connect(&mut self, ctx: &egui::Context) {
         let key = self.nexus_key_input.trim().to_string();
         if key.is_empty() {
@@ -565,16 +638,22 @@ impl App {
         self.nexus_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let res = (|| -> std::result::Result<String, String> {
-                crate::nexus::store_key(&key).map_err(|e| format!("{e:#}"))?;
-                let user = crate::nexus::validate().map_err(|e| {
-                    // key invalida: no dejarla guardada.
+            let ev = match crate::nexus::store_key(&key).and_then(|()| crate::nexus::validate()) {
+                Ok(u) => NexusEvent::Connected {
+                    name: u.name,
+                    premium: u.is_premium,
+                    announce: true,
+                },
+                Err(e) => {
+                    // key invalida o no guardable: no dejar una key que no valida en el llavero.
                     let _ = crate::nexus::clear_key();
-                    format!("{e:#}")
-                })?;
-                Ok(user.name)
-            })();
-            let _ = tx.send(res);
+                    NexusEvent::Failed {
+                        msg: format!("{e:#}"),
+                        announce: true,
+                    }
+                }
+            };
+            let _ = tx.send(ev);
             ctx.request_repaint();
         });
     }
@@ -584,6 +663,7 @@ impl App {
         let _ = crate::nexus::clear_key();
         self.nexus_connected = false;
         self.nexus_user = None;
+        self.nexus_premium = false;
         self.show_toast("desconectado de Nexus", false);
     }
 
@@ -592,17 +672,30 @@ impl App {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(name)) => {
+            Ok(NexusEvent::Connected {
+                name,
+                premium,
+                announce,
+            }) => {
                 self.nexus_user = Some(name.clone());
+                self.nexus_premium = premium;
                 self.nexus_connected = true;
                 self.nexus_key_input.clear();
                 self.nexus_job = None;
-                self.show_toast(format!("Nexus conectado como {name}"), false);
+                if announce {
+                    let tag = if premium { " (Premium)" } else { "" };
+                    self.show_toast(format!("Nexus conectado como {name}{tag}"), false);
+                }
             }
-            Ok(Err(e)) => {
-                self.nexus_user = None;
+            Ok(NexusEvent::Failed { msg, announce }) => {
                 self.nexus_job = None;
-                self.show_toast(e, true);
+                if announce {
+                    // Conexion explicita fallida: la key ya se borro en el worker.
+                    self.nexus_user = None;
+                    self.nexus_connected = false;
+                    self.show_toast(msg, true);
+                }
+                // Validacion de arranque fallida (announce=false): dejar el estado como esta.
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => self.nexus_job = None,
@@ -648,5 +741,30 @@ impl App {
             crate::modupdate::apply(&install, &upd.mod_id, &upd.asset_url, &upd.tag)?;
             Ok(format!("actualizado: {id} v{}", upd.latest))
         });
+    }
+
+    /// Baja e instala DIRECTO de Nexus (Premium): resuelve el download-link del archivo MAIN, baja
+    /// el `.zip` e instala reemplazando solo si el zip es ese mod (preserva enable/disable).
+    fn apply_nexus_update(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        upd: crate::modupdate::ModUpdate,
+    ) {
+        let Some(install) = self.install.clone() else {
+            return;
+        };
+        let Some(nref) = upd.nexus.clone() else {
+            return;
+        };
+        self.mod_updates.remove(&id);
+        self.run_action(
+            ctx,
+            format!("actualizando {id} desde Nexus..."),
+            move || {
+                crate::modupdate::apply_nexus(&install, &upd.mod_id, &nref, &upd.latest)?;
+                Ok(format!("actualizado desde Nexus: {id} v{}", upd.latest))
+            },
+        );
     }
 }
