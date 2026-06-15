@@ -3,6 +3,17 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.11.1] - 2026-06-15 — fix: la pestaña Sync se podia salir de la ventana sin scroll
+
+- **El contenido de las pestañas ahora se puede DESLIZAR.** El area central no tenia un scroll, asi
+  que en una ventana baja (la minima es 700x480) el contenido de Sync (cargar set + manifest + plan +
+  consentimiento + boton "Instalar") se salia por abajo y no habia forma de llegar al boton. Se
+  envolvio el contenido de cada pestaña en un `ScrollArea` vertical; ademas, al fijar un ancho
+  definido, las etiquetas largas hacen wrap en vez de salirse por el costado.
+- **Filas de inputs/listas de Sync mas robustas:** las filas "URL/Repositorio" y la lista de sets
+  guardados usan `horizontal_wrapped` (los botones/indicadores bajan de linea si no entran) y los
+  campos de texto tienen un ancho que entra en la ventana minima.
+
 ## [1.11.0] - 2026-06-15 — auto-update sin minisign · sync P2P opt-in (no mas 0%) · modo claro
 
 - **El auto-update ya NO exige firma minisign.** El ancla de confianza pasa a ser HTTPS + que el

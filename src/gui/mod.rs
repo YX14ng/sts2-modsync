@@ -520,11 +520,19 @@ impl eframe::App for App {
 
         egui::Frame::default()
             .inner_margin(egui::Margin::same(14))
-            .show(ui, |ui| match self.tab {
-                Tab::Mods => self.ui_mods(ui, &ctx),
-                Tab::Sync => self.ui_sync(ui, &ctx),
-                Tab::Profiles => self.ui_profiles(ui, &ctx),
-                Tab::Publish => self.ui_publish(ui, &ctx),
+            .show(ui, |ui| {
+                // El contenido de cada pestaña puede superar el alto de la ventana (la minima es
+                // 700x480): un ScrollArea vertical permite deslizar hasta el final (p.ej. el boton
+                // "Instalar" de Sync) y, al fijar un ancho definido, hace que las etiquetas largas
+                // se ajusten (wrap) en vez de salirse de la ventana.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.tab {
+                        Tab::Mods => self.ui_mods(ui, &ctx),
+                        Tab::Sync => self.ui_sync(ui, &ctx),
+                        Tab::Profiles => self.ui_profiles(ui, &ctx),
+                        Tab::Publish => self.ui_publish(ui, &ctx),
+                    });
             });
     }
 }

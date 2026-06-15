@@ -178,12 +178,14 @@ impl App {
         let busy_any = self.any_job();
 
         card(ui, "Cargar un set", |ui| {
-            ui.horizontal(|ui| {
+            // `horizontal_wrapped` + anchos moderados: en la ventana minima (700px) la fila no se
+            // sale; si no entra, los botones bajan a la linea siguiente en vez de cortarse.
+            ui.horizontal_wrapped(|ui| {
                 ui.label("URL:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.sync.url)
                         .hint_text("https://.../set-manifest.json")
-                        .desired_width(360.0),
+                        .desired_width(240.0),
                 );
                 let can = !busy_any && !self.sync.url.trim().is_empty();
                 if ui
@@ -200,12 +202,12 @@ impl App {
                 }
             });
             // Suscribirse por REPO: sigue el ULTIMO release (no hay que re-pegar la URL al actualizar).
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("o Repositorio:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.sync.repo_input)
                         .hint_text("usuario/repo (sigue el ultimo release)")
-                        .desired_width(300.0),
+                        .desired_width(220.0),
                 );
                 let can =
                     !busy_any && crate::github::normalize_repo(&self.sync.repo_input).is_some();
@@ -242,7 +244,9 @@ impl App {
                     }
                 });
                 for s in self.cfg.subscribed_sets.clone() {
-                    ui.horizontal(|ui| {
+                    // `horizontal_wrapped`: una clave/nombre largo hace wrap a la linea siguiente en
+                    // vez de empujar la version/el aviso "nueva" fuera de la ventana.
+                    ui.horizontal_wrapped(|ui| {
                         if ui
                             .add_enabled(!busy_any, egui::Button::new("Cargar"))
                             .clicked()
