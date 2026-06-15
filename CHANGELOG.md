@@ -3,6 +3,25 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.9.0] - 2026-06-15 — Nexus: descarga automatica via handler nxm:// (auto-update fase 2b)
+
+- **Descarga automatica de mods de Nexus** (modulo `nxm`): se registra la app como handler del
+  protocolo `nxm://` (boton "Mod Manager Download" de la web de Nexus). Cuando lo tocas en la pagina
+  de un mod, el navegador le pasa el link a la app, que resuelve el download-link (`nexus::download_link`,
+  con el `key`/`expires` de un solo uso para usuarios gratis, o directo si sos Premium), baja e instala.
+- **GUI:** boton "Registrar Mod Manager Download (nxm://)" en el detalle de un mod de Nexus (+ quitar).
+  **CLI:** `nxm-register` / `nxm-unregister` (alta/baja del handler), `nxm <link>` (lo invoca Windows).
+- Como `nxm <link>` lo lanza el protocolo (sin consola), el resultado se muestra en un **dialogo** del SO.
+- Solo se instalan **`.zip`** automaticamente; si Nexus sirve `.7z`/`.rar`, se guarda en Descargas con un
+  aviso para instalarlo a mano (extraer + "Instalar carpeta"/".zip"). El install reusa la defensa
+  anti zip-slip y exige el juego cerrado.
+- Registrar `nxm://` TOMA el protocolo de Vortex/Mod Organizer si los tenes (es opt-in y reversible).
+- El handler escribe en `HKCU` (per-user, sin admin). Descarga con tope de tamaño y HTTPS en cada hop.
+
+> El flujo end-to-end (web -> app) necesita una cuenta de Nexus real para probarse; los componentes
+> (parseo del link, registro del protocolo, descarga, install) tienen tests. Cierra la fase 2 del
+> auto-update de mods: GitHub (1.7) + Nexus chequeo (1.8) + Nexus descarga (1.9).
+
 ## [1.8.0] - 2026-06-15 — Nexus: API key + chequeo de version (auto-update fase 2a)
 
 - **Conexion con Nexus Mods** (modulo `nexus`): pegas tu **API Key personal** (de tu cuenta, en

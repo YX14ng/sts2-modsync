@@ -12,8 +12,6 @@ use crate::detect::Install;
 use crate::modsource::ModSource;
 use crate::{config, manager, modlist, transport, update};
 use anyhow::{Context, Result, bail};
-use std::io::Read;
-use std::path::Path;
 
 /// Techo duro de la descarga de un asset: un `.zip` mas grande se rechaza (no llenar el disco con un
 /// release-bomba). Holgado para mods con `.pck` grandes, pero acotado.
@@ -207,7 +205,7 @@ pub fn apply(install: &Install, mod_id: &str, asset_url: &str, tag: &str) -> Res
     let tmp = std::env::temp_dir().join(format!("sts2_modupdate_{}.zip", unique_suffix()));
     // Bajar + instalar; limpiar el `.zip` temporal SIEMPRE (exito o error).
     let res = (|| {
-        download_to(asset_url, &tmp)?;
+        transport::download_capped(asset_url, &tmp, DOWNLOAD_MAX)?;
         manager::install_update_zip(install, &tmp, mod_id)
     })();
     let _ = std::fs::remove_file(&tmp);
@@ -223,38 +221,6 @@ pub fn apply(install: &Install, mod_id: &str, asset_url: &str, tag: &str) -> Res
     cfg.mod_installed_tag
         .insert(mod_id.to_string(), tag.to_string());
     let _ = config::save(&cfg);
-    Ok(())
-}
-
-/// Baja `url` (HTTPS) a `dest` en streaming, con un techo duro (`DOWNLOAD_MAX`): rechaza por
-/// `Content-Length` si viene, y corta si el cuerpo lo supera igual (Content-Length puede mentir/faltar).
-fn download_to(url: &str, dest: &Path) -> Result<()> {
-    transport::require_https(url)?; // simetria con transport::fetch / update::apply (https en el GET)
-    let resp = transport::http_client()?
-        .get(url)
-        .send()
-        .with_context(|| format!("bajando {url}"))?
-        .error_for_status()
-        .with_context(|| format!("bajando {url}"))?;
-    if let Some(len) = resp.content_length()
-        && len > DOWNLOAD_MAX
-    {
-        bail!(
-            "el archivo del release es enorme ({} MB): abortado",
-            len / 1_048_576
-        );
-    }
-    let mut f =
-        std::fs::File::create(dest).with_context(|| format!("creando {}", dest.display()))?;
-    // `take(MAX+1)`: si copia MAX+1 bytes, el cuerpo supero el tope -> abortar.
-    let n = std::io::copy(&mut resp.take(DOWNLOAD_MAX + 1), &mut f)
-        .with_context(|| format!("escribiendo {}", dest.display()))?;
-    if n > DOWNLOAD_MAX {
-        bail!(
-            "el archivo del release supera {} MB: abortado",
-            DOWNLOAD_MAX / 1_048_576
-        );
-    }
     Ok(())
 }
 

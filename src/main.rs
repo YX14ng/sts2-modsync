@@ -67,6 +67,9 @@ fn main() -> Result<()> {
     if matches!(cmd, "nexus-login" | "nexus-logout" | "nexus-status") {
         return cmd_nexus(cmd, &args);
     }
+    if matches!(cmd, "nxm" | "nxm-register" | "nxm-unregister") {
+        return cmd_nxm(cmd, &args);
+    }
 
     let cfg = config::load();
     let Some(install) = resolve_install(&cfg) else {
@@ -708,6 +711,197 @@ fn cmd_nexus(cmd: &str, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Tope de la descarga de un archivo de Nexus (mods con `.pck` grandes pueden pesar varios GB).
+const NXM_DOWNLOAD_MAX: u64 = 4 * 1024 * 1024 * 1024;
+
+/// `nxm <link>` (lo invoca Windows al tocar "Mod Manager Download" en Nexus): resuelve el download-link,
+/// baja e instala. `nxm-register` / `nxm-unregister`: alta/baja del handler del protocolo. Como se lanza
+/// por el protocolo (sin consola), el resultado se muestra en un DIALOGO.
+fn cmd_nxm(cmd: &str, args: &[String]) -> Result<()> {
+    use sts2_modsync::nxm;
+    match cmd {
+        "nxm-register" => {
+            nxm::register()?;
+            println!("registrado como handler de nxm:// (Mod Manager Download de Nexus).");
+            Ok(())
+        }
+        "nxm-unregister" => {
+            nxm::unregister()?;
+            println!("handler nxm:// removido.");
+            Ok(())
+        }
+        "nxm" => {
+            // Lanzado por el protocolo (sin consola): TODO feedback va por dialogo, incluido el link faltante.
+            let Some(link) = args.get(1) else {
+                nxm_dialog(
+                    "Nexus — error",
+                    "falta el link nxm:// (lo deberia pasar el navegador al tocar \"Mod Manager Download\").",
+                    true,
+                );
+                bail!("uso: nxm <link>");
+            };
+            let res = run_nxm(link);
+            match &res {
+                Ok(msg) => {
+                    println!("{msg}");
+                    nxm_dialog("Nexus", msg, false);
+                }
+                Err(e) => {
+                    let m = format!("{e:#}");
+                    eprintln!("{m}");
+                    nxm_dialog("Nexus — no se pudo instalar", &m, true);
+                }
+            }
+            res.map(|_| ())
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Baja+instala el archivo que apunta un link `nxm://`. Devuelve un mensaje para el dialogo.
+fn run_nxm(link: &str) -> Result<String> {
+    use sts2_modsync::{nexus, nxm};
+    // NO interpolar el link crudo: trae `?key=..&expires=..` (credencial de un solo uso). Reportar
+    // solo la parte SIN query (hasta el primer `?`), para no filtrarla al dialogo/stderr.
+    let l = nxm::parse_nxm_link(link).with_context(|| {
+        let safe = link.split('?').next().unwrap_or(link);
+        format!("link nxm invalido: {safe:?} (esperado nxm://<game>/mods/<id>/files/<id>)")
+    })?;
+    let cfg = config::load();
+    // Auto-deteccion SOLO (sin dialogo de carpeta: lanzado por el protocolo, un selector que aparece
+    // de la nada confunde). Si no hay install, pedir abrir la app primero.
+    let install = detect_install_auto(&cfg).context(
+        "no se detecto Slay the Spire 2. Abri la app (sin argumentos) una vez para fijar la carpeta, \
+         y reintenta desde Nexus.",
+    )?;
+    if detect::is_game_running() {
+        // El link nxm es de UN SOLO USO y caduca: hay que re-iniciar desde la web tras cerrar el juego.
+        bail!(
+            "Cerra Slay the Spire 2 y volve a tocar \"Mod Manager Download\" en Nexus (el link es de \
+             un solo uso y ya caduco)."
+        );
+    }
+    println!(
+        "Nexus {}/{} (archivo {}) — resolviendo la descarga...",
+        l.game, l.mod_id, l.file_id
+    );
+    let url = nexus::download_link(
+        &l.game,
+        l.mod_id,
+        l.file_id,
+        l.key.as_deref(),
+        l.expires.as_deref(),
+    )?;
+    let is_zip = url_extension(&url).is_some_and(|e| e == "zip");
+    // Nombre de temp FIJO (no interpolar nada de la URL en el path): la extension solo decide el flujo.
+    let tmp = std::env::temp_dir().join(format!(
+        "sts2_nxm_{}.{}",
+        nxm_suffix(),
+        if is_zip { "zip" } else { "bin" }
+    ));
+    println!("bajando...");
+    if let Err(e) = transport::download_capped(&url, &tmp, NXM_DOWNLOAD_MAX) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if is_zip {
+        let r = manager::install_from_zip(&install, &tmp, true);
+        let _ = std::fs::remove_file(&tmp);
+        let id = r.context("instalando el .zip de Nexus")?;
+        Ok(format!("instalado desde Nexus: {id}"))
+    } else {
+        // No extraemos .7z/.rar: PRESERVAR el archivo (a Descargas, o queda en temp) para instalar a mano.
+        match move_to_downloads(&tmp, &url) {
+            Ok(dst) => Ok(format!(
+                "el archivo de Nexus no es .zip. Lo guarde en {}; extraelo e instala con 'Instalar \
+                 carpeta' o 'Instalar .zip' (pestaña Mods).",
+                dst.display()
+            )),
+            Err(_) => Ok(format!(
+                "el archivo de Nexus no es .zip y quedo en {}; extraelo e instala a mano (pestaña Mods).",
+                tmp.display()
+            )),
+        }
+    }
+}
+
+/// Deteccion del install SIN dialogo manual (cacheado + auto). Para `nxm` lanzado por el protocolo.
+fn detect_install_auto(cfg: &config::Config) -> Option<detect::Install> {
+    if let Some(root) = &cfg.install_root
+        && let Some(i) = detect::from_root(root)
+    {
+        return Some(i);
+    }
+    detect::detect()
+}
+
+/// Extension (lowercase) del archivo de una URL: solo el ultimo segmento del path (sin query),
+/// partiendo por `/` Y `\` para no dejar pasar separadores de Windows.
+fn url_extension(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())
+}
+
+/// Nombre de archivo SEGURO derivado de una URL: solo el ultimo segmento, sin separadores (`/` `\`),
+/// `:`, control-chars ni `.` al borde (cierra path-traversal si el CDN devolviera un nombre hostil).
+fn safe_download_name(url: &str) -> String {
+    let raw = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("");
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':') && !c.is_control())
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.');
+    if cleaned.is_empty() {
+        "nexus_mod.bin".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+/// Mueve el archivo bajado a la carpeta de Descargas (o temp) con un nombre SANEADO. rename si se
+/// puede, sino copy+borrar. Devuelve el destino.
+fn move_to_downloads(tmp: &Path, url: &str) -> Result<std::path::PathBuf> {
+    let dir = directories::UserDirs::new()
+        .and_then(|u| u.download_dir().map(Path::to_path_buf))
+        .unwrap_or_else(std::env::temp_dir);
+    let dst = dir.join(safe_download_name(url));
+    if std::fs::rename(tmp, &dst).is_ok() {
+        return Ok(dst);
+    }
+    std::fs::copy(tmp, &dst).with_context(|| format!("guardando en {}", dst.display()))?;
+    let _ = std::fs::remove_file(tmp);
+    Ok(dst)
+}
+
+fn nxm_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Muestra un dialogo del SO con el resultado del nxm (cuando se lanza por el protocolo no hay
+/// consola). Best-effort: si no se puede mostrar, no pasa nada.
+fn nxm_dialog(title: &str, body: &str, error: bool) {
+    let level = if error {
+        rfd::MessageLevel::Error
+    } else {
+        rfd::MessageLevel::Info
+    };
+    rfd::MessageDialog::new()
+        .set_level(level)
+        .set_title(title)
+        .set_description(body)
+        .show();
+}
+
 /// `update`: chequea el ultimo release en GitHub y, si hay una version nueva, se actualiza.
 fn cmd_update() -> Result<()> {
     println!("version actual: {}", update::current_version());
@@ -851,6 +1045,45 @@ fn print_help() {
     );
     println!("  nexus-status / nexus-logout   estado / desconectar de Nexus");
     println!(
+        "  nxm-register / nxm-unregister registra/saca esta app como handler de nxm:// (\"Mod Manager Download\" de Nexus)"
+    );
+    println!(
+        "  nxm <link>            (lo invoca Windows) baja+instala el archivo de un link nxm:// de Nexus"
+    );
+    println!(
         "\nGUI (mod manager con pestañas): corre el exe SIN argumentos (o `cargo run --features gui`)."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{safe_download_name, url_extension};
+
+    #[test]
+    fn safe_download_name_cierra_path_traversal() {
+        // nombre normal: se conserva.
+        assert_eq!(
+            safe_download_name("https://cdn/files/MiMod-1.2.zip?md5=x&expires=9"),
+            "MiMod-1.2.zip"
+        );
+        // backslashes de Windows en el ultimo segmento: NO sobreviven (no escapan de Descargas).
+        let bad = safe_download_name("https://cdn/a/..\\..\\Startup\\evil.bat");
+        assert!(
+            !bad.contains('\\') && !bad.contains('/'),
+            "no debe traer separadores: {bad}"
+        );
+        // ".." y nombre vacio -> fallback seguro.
+        assert_eq!(safe_download_name("https://cdn/x/.."), "nexus_mod.bin");
+        assert_eq!(safe_download_name("https://cdn/"), "nexus_mod.bin");
+    }
+
+    #[test]
+    fn url_extension_parte_por_ambos_separadores() {
+        assert_eq!(
+            url_extension("https://cdn/a/b.ZIP?x=1").as_deref(),
+            Some("zip")
+        );
+        assert_eq!(url_extension("https://cdn/a/b.7z").as_deref(), Some("7z"));
+        assert_eq!(url_extension("https://cdn/noext").as_deref(), None);
+    }
 }

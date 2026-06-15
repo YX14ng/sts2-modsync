@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.8.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.9.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -38,11 +38,18 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
 - **1.8.0 (fase 2a):** **Nexus.** Modulo `nexus`: API Key personal en el llavero (`store_key`/`load_key`),
   `validate()` (usuario/Premium) y `check(game, mod_id, current)` (version del mod via la API v1).
   `modupdate::check_nexus` lo envuelve en un `ModUpdate` con `asset_url` VACIO (sin auto-download).
-  La descarga auto de Nexus es **fase 2b** (handler `nxm://`, sin empezar): hoy boton "Abrir en Nexus".
+- **1.9.0 (fase 2b):** **descarga auto de Nexus via `nxm://`.** Modulo `nxm`: `parse_nxm_link` +
+  `register`/`unregister`/`is_registered` (handler del protocolo en HKCU via `winreg`, solo Windows).
+  `nexus::download_link` resuelve el CDN (con `key`/`expires` del link, o directo Premium). CLI
+  `nxm <link>` (lo invoca Windows al tocar "Mod Manager Download"): baja con `transport::download_capped`
+  e instala el `.zip`; `.7z`/`.rar` se guardan a Descargas (no se extraen). Resultado en un dialogo (rfd).
+  GUI: boton "Registrar Mod Manager Download (nxm://)".
 
-Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): **fase 2b** (handler
-`nxm://` + `download_link` para que la descarga de Nexus sea automatica), crear el repo de mods con un
-click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
+Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): soporte `.7z` para
+los mods de Nexus, crear el repo de mods con un click, OAuth `OAUTH_CLIENT_ID` real, delta zstd, y
+confirmar en el flujo `nxm` antes de reemplazar si el id del `.zip` colisiona con OTRO mod instalado
+(hoy `install_from_zip(overwrite=true)` lo manda a la papelera sin preguntar; reversible, no rompe
+invariantes, pero el flujo lanzado por el protocolo no tiene prompt).
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
@@ -84,8 +91,8 @@ click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
   install/uninstall = **MOVER carpetas**, juego cerrado) · `profile` (perfiles = conjuntos habilitados)
   · `launch` (abrir el juego) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
   `modupdate` (auto-update de un mod desde su upstream: `check_github`/`check_nexus` + `apply`
-  baja+instala) · `nexus` (API v1 de Nexus: API key en el llavero + `validate` + `check` de version;
-  la descarga auto es fase 2b).
+  baja+instala) · `nexus` (API v1 de Nexus: API key en el llavero + `validate` + `check` + `download_link`)
+  · `nxm` (handler del protocolo `nxm://`: parse + registro en HKCU, solo Windows).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
   delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
@@ -135,6 +142,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
     modulo `github`: PAT o OAuth device-flow si se setea `github::OAUTH_CLIENT_ID`)
   · `nexus-login` / `nexus-status` / `nexus-logout` (API Key de Nexus guardada en el llavero; lee de
     `NEXUS_APIKEY` o stdin; habilita el chequeo de version de mods de Nexus — `mod-check`/GUI)
+  · `nxm-register` / `nxm-unregister` (alta/baja del handler `nxm://` en HKCU) · `nxm <link>` (lo
+    INVOCA Windows al tocar "Mod Manager Download" en Nexus: baja+instala; resultado en un dialogo)
   · `seed <out_dir>` (P2P: seedea un set publicado por torrent; bloquea hasta Ctrl-C; necesita
     `--features p2p`. En el GUI: boton "Seedear este set (P2P)" en la pestaña Publicar).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.

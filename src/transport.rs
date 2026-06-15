@@ -207,6 +207,46 @@ fn manifest_url_from_latest(owner: &str, repo: &str, body: &str) -> Result<Strin
     ))
 }
 
+/// URL sin el query-string (`?...`/`#...`): para errores/logs que no deben filtrar tokens firmados
+/// (el CDN de Nexus firma la descarga con `?md5=..&expires=..`, un grant de un solo uso).
+fn redact_url(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
+/// Baja `url` (HTTPS) a `dest` en streaming, con un techo duro `max_bytes`: rechaza por
+/// `Content-Length` si viene, y corta si el cuerpo lo supera igual (puede mentir/faltar). Para los
+/// `.zip` de releases/Nexus: no llenar el disco con un archivo gigante. El cliente exige https en
+/// cada hop (no degradar a http en un redirect).
+pub fn download_capped(url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
+    require_https(url)?;
+    // El CDN de Nexus FIRMA la descarga con `?md5=..&expires=..` (un grant de un solo uso para ese
+    // archivo): no debe filtrarse al log/dialogo. Por eso el contexto usa la URL SIN query y a cada
+    // error de reqwest (que adjunta la URL completa) le sacamos la URL con `without_url()`. Para los
+    // demas llamadores (assets de GitHub, sin query) es inocuo.
+    let safe = redact_url(url);
+    let resp = http_client()?
+        .get(url)
+        .send()
+        .map_err(|e| e.without_url())
+        .with_context(|| format!("bajando {safe}"))?
+        .error_for_status()
+        .map_err(|e| e.without_url())
+        .with_context(|| format!("bajando {safe}"))?;
+    if let Some(len) = resp.content_length()
+        && len > max_bytes
+    {
+        bail!("el archivo es enorme ({} MB): abortado", len / 1_048_576);
+    }
+    let mut f =
+        std::fs::File::create(dest).with_context(|| format!("creando {}", dest.display()))?;
+    let n = std::io::copy(&mut resp.take(max_bytes + 1), &mut f)
+        .with_context(|| format!("escribiendo {}", dest.display()))?;
+    if n > max_bytes {
+        bail!("el archivo supera {} MB: abortado", max_bytes / 1_048_576);
+    }
+    Ok(())
+}
+
 /// GET de una URL y devuelve el body como texto. Para bajar el `set-manifest.json` desde
 /// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
 pub fn get_text(url: &str) -> Result<String> {
@@ -288,6 +328,21 @@ mod tests {
         assert!(manifest_url_from_latest("o", "r", r#"{"tag_name":"release/1.0"}"#).is_err());
         // json invalido -> error (no panic).
         assert!(manifest_url_from_latest("o", "r", "no json").is_err());
+    }
+
+    #[test]
+    fn redact_url_saca_la_query_firmada() {
+        // El CDN de Nexus firma con `?md5=..&expires=..`: no debe sobrevivir al log/error.
+        assert_eq!(
+            redact_url("https://cdn.nexus/files/Mod.zip?md5=SECRET&expires=9"),
+            "https://cdn.nexus/files/Mod.zip"
+        );
+        assert_eq!(redact_url("https://cdn/x#frag"), "https://cdn/x");
+        // URL sin query: intacta.
+        assert_eq!(
+            redact_url("https://github.com/o/r/x.zip"),
+            "https://github.com/o/r/x.zip"
+        );
     }
 
     #[test]

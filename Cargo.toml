@@ -1,6 +1,6 @@
 [package]
 name = "sts2-modsync"
-version = "1.8.0"
+version = "1.9.0"
 edition = "2024"
 license = "MIT"
 description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
@@ -35,6 +35,11 @@ zip = "8.6.0"
 # que NO hace falta tokio/futures-util (evitamos toda la superficie async).
 # FASE 3 (delta intra-`.pck`): HECHA con `qbsdiff` (bsdiff) — ver arriba. Pendiente opcional:
 # zstd para comprimir el patch/transferencia.
+
+# Registro de Windows: registrar el protocolo `nxm://` (handler de "Mod Manager Download" de Nexus)
+# en HKCU (per-user, sin admin). Solo Windows; el resto del codigo lo usa gateado por `cfg(windows)`.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 [profile.release]
 opt-level = "z"

@@ -428,6 +428,36 @@ impl App {
                         ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
                     });
                 }
+                // Handler nxm://: con esto, "Mod Manager Download" en Nexus baja+instala con esta app.
+                // Se lee directo (no cacheado): asi refleja un cambio hecho por CLI o por otra app.
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    if crate::nxm::is_registered() {
+                        ui.colored_label(super::OK, "✓ handler nxm:// registrado");
+                        ui.label(
+                            egui::RichText::new("(toca \"Mod Manager Download\" en Nexus)").weak(),
+                        );
+                        if ui.small_button("quitar").clicked() {
+                            match crate::nxm::unregister() {
+                                Ok(()) => self.show_toast("handler nxm:// removido", false),
+                                Err(e) => self.show_toast(format!("{e:#}"), true),
+                            }
+                        }
+                    } else if ui
+                        .button("Registrar \"Mod Manager Download\" (nxm://)")
+                        .on_hover_text(
+                            "Registra esta app como handler de nxm://: al tocar \"Mod Manager Download\" \
+                             en la web de Nexus, baja e instala el mod aca. Toma el protocolo de Vortex/MO2 \
+                             (lo respalda y lo restaura si lo quitas).",
+                        )
+                        .clicked()
+                    {
+                        match crate::nxm::register() {
+                            Ok(()) => self.show_toast("handler nxm:// registrado", false),
+                            Err(e) => self.show_toast(format!("{e:#}"), true),
+                        }
+                    }
+                });
             }
         }
     }

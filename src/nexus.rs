@@ -150,6 +150,65 @@ pub fn check(game: &str, mod_id: u64, current: Option<&str>) -> Result<Option<Ne
     }))
 }
 
+/// Una URL de descarga del CDN (de `download_link.json`).
+#[derive(Debug, Deserialize)]
+struct DownloadLink {
+    #[serde(rename = "URI")]
+    uri: String,
+}
+
+/// Resuelve la URL de descarga (CDN) de un archivo de un mod (fase 2b). `key`/`expires` vienen del
+/// link `nxm://` (un solo uso, los genera la web para usuarios gratis); para Premium pueden ir vacios
+/// y la API devuelve el link directo. Devuelve la PRIMERA URI. Necesita la API key guardada.
+pub fn download_link(
+    game: &str,
+    mod_id: u64,
+    file_id: u64,
+    key: Option<&str>,
+    expires: Option<&str>,
+) -> Result<String> {
+    let apikey = load_key().context("conecta tu API key de Nexus (nexus-login) para descargar")?;
+    let url = format!("{API}/games/{game}/mods/{mod_id}/files/{file_id}/download_link.json");
+    // `key`/`expires` (de un solo uso) van por `.query()` para que reqwest los url-encodee. OJO: reqwest
+    // adjunta la URL COMPLETA (con `?key=..&expires=..`) a su PROPIO error, y `{e:#}` la imprimiria en
+    // el dialogo/stderr — por eso a cada error de reqwest le sacamos la URL con `without_url()` ANTES de
+    // envolverlo, y el contexto propio usa la URL BASE (sin la query). Asi la credencial no se filtra.
+    let mut req = nexus_client()?
+        .get(&url)
+        .header("apikey", &apikey)
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let (Some(k), Some(e)) = (key, expires) {
+        req = req.query(&[("key", k), ("expires", e)]);
+    }
+    let resp = req
+        .send()
+        .map_err(|e| e.without_url())
+        .with_context(|| format!("GET {url}"))?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("la API key de Nexus es invalida");
+    }
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        bail!(
+            "Nexus rechazo la descarga (403): para bajar gratis hay que iniciar desde \"Mod Manager \
+             Download\" en la pagina del mod (genera un link de un solo uso), o ser Premium"
+        );
+    }
+    let body = resp
+        .error_for_status()
+        .map_err(|e| e.without_url())
+        .context("nexus api (download_link)")?
+        .text()
+        .map_err(|e| e.without_url())
+        .context("leyendo el download_link de Nexus")?;
+    let links: Vec<DownloadLink> =
+        serde_json::from_str(&body).context("parseando el download_link de Nexus")?;
+    links
+        .into_iter()
+        .map(|l| l.uri)
+        .find(|u| !u.is_empty())
+        .context("Nexus no devolvio una URL de descarga")
+}
+
 /// "Hay una version distinta disponible" para versiones de Nexus, que son TEXTO LIBRE (ej "1.2",
 /// "v2", "Beta 3", "2024-05-01"). Si AMBAS son semver puro (`vX.Y.Z`), usa la comparacion numerica
 /// (`is_newer`, confiable y sin falsos positivos por "1.0" vs "1.0.0"). Si alguna NO lo es (fecha,
