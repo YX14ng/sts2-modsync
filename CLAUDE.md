@@ -86,8 +86,15 @@ mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/t
   `fetch` los copia a destino, y si **no hay seeder** cae a `GitHubReleases` (HTTP). El magnet va
   en el manifest FIRMADO; `apply` igual verifica BLAKE3, asi que bajar de un peer es seguro. Envs
   avanzados (LAN/tests): `STS2_P2P_PEERS=ip:port,...`, `STS2_P2P_SEED_PORT`, `STS2_P2P_NODHT`.
-- **Front:** `main` (CLI con subcomandos) · `gui` (eframe, pestañas; feature `gui` que INCLUYE
-  `p2p`). `lib.rs` reexporta.
+- **Front:** `main` (CLI con subcomandos) · `gui/` (eframe, feature `gui` que INCLUYE `p2p`):
+  partido en submodulos — `gui/mod.rs` (chasis: struct `App` con TODOS los campos privados, `new`,
+  tema, `run`, topbar/nav, dispatcher `ui()`, y los metodos transversales scan/accion/toast/auto-update)
+  · `widgets` (free fns de presentacion: `card`/`human_*`/toasts/onboarding) · `mods_tab` · `sync_tab`
+  (estado `SyncState` + workers de fetch/plan/apply + suscripciones) · `publish_tab` (+ seed P2P)
+  · `profiles_tab` · `github_login`. Cada tab aporta un `impl App` parcial; un submodulo HIJO ve los
+  campos privados de `App` (definido en `mod.rs`), asi NO hay que volver `pub` el estado. Lo que el
+  padre nombra de un hijo (tipos en campos de `App`, free fns compartidas) va `pub(super)`. `lib.rs`
+  reexporta. **Para tocar una pestaña, editas SU archivo, no un monolito.**
 
 Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod trae para el juego
 (modelo en `modlist::ModManifest`) y el **set-manifest** de la sync (`manifest::SetManifest` /
