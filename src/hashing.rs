@@ -34,6 +34,12 @@ pub fn blake3_file(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Hash BLAKE3 (hex) de un buffer en memoria (p.ej. un patch bsdiff recien generado, o el
+/// resultado de aplicar un patch antes de escribirlo a disco).
+pub fn blake3_bytes(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
 /// Compara el hash de un archivo local contra el esperado (case-insensitive en hex).
 /// `false` si el archivo no existe.
 pub fn matches(path: &Path, expected_hex: &str) -> bool {

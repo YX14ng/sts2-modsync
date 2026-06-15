@@ -402,8 +402,26 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         published_at: String::new(),
         baselib_version: None,
     };
-    let prep = publish::prepare(&mods, &ids, &params)?;
+    let mut prep = publish::prepare(&mods, &ids, &params)?;
     let out_dir = Path::new(out);
+
+    // Delta intra-archivo: generar patches bsdiff contra la publicacion anterior en out_dir, asi
+    // un amigo que ya tiene la version vieja baja solo el diff (no el `.pck` entero). Opcional.
+    if args.iter().any(|a| a == "--no-delta") {
+        println!("(--no-delta: no se generan patches incrementales)");
+    } else {
+        match publish::add_deltas(&mut prep, out_dir) {
+            Ok(r) if r.patches > 0 => println!(
+                "  deltas  : {} patch(es) ({:.1} MB) reemplazan {:.1} MB de full -> los amigos al dia bajan el diff",
+                r.patches,
+                r.patch_bytes as f64 / 1.0e6,
+                r.full_bytes as f64 / 1.0e6,
+            ),
+            Ok(_) => {} // primera publicacion o nada cambio: sin deltas
+            Err(e) => eprintln!("[!] no se pudieron generar deltas (se sigue sin ellos): {e:#}"),
+        }
+    }
+
     let manifest_path = publish::write_out(&prep, out_dir)?;
 
     println!("\nGenerado:");
@@ -580,8 +598,13 @@ fn print_plan(plan: &sync::Plan) {
         plan.to_download.len(),
         plan.bytes_to_download as f64 / 1.0e6
     );
-    for f in &plan.to_download {
-        println!("    + {}  ({} B)", f.path, f.size);
+    for d in &plan.to_download {
+        let tag = if d.is_delta() {
+            format!(" [delta {} B]", d.fetch_bytes())
+        } else {
+            String::new()
+        };
+        println!("    + {}  ({} B){tag}", d.entry.path, d.entry.size);
     }
     if !plan.orphans.is_empty() {
         println!("  huerfanos a borrar: {}", plan.orphans.len());

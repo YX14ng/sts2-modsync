@@ -85,6 +85,26 @@ pub struct FileEntry {
     pub size: u64,
     /// Hash BLAKE3 en hex del contenido.
     pub blake3: String,
+    /// Patches binarios (bsdiff) que reconstruyen ESTE archivo desde una version anterior que el
+    /// cliente ya tenga en disco, en vez de bajar el asset COMPLETO (delta intra-`.pck`: cambiar
+    /// una carta de un mod no rebaja el `.pck` de 100 MB entero). Opcional => backward-compatible
+    /// (sets viejos = solo full). Cada patch es un asset content-addressed por su PROPIO blake3;
+    /// el cliente lo verifica al bajarlo y RE-verifica el resultado contra `blake3`, asi un delta
+    /// nunca corrompe (si algo falla, cae a bajar el asset completo).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deltas: Vec<Delta>,
+}
+
+/// Un patch bsdiff que transforma la version con hash `from_blake3` de un archivo en la version
+/// ACTUAL (`FileEntry.blake3`). El patch mismo es un asset descargable nombrado por `patch_blake3`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Delta {
+    /// BLAKE3 (hex) de la version VIEJA que este patch transforma (la que el cliente debe tener).
+    pub from_blake3: String,
+    /// BLAKE3 (hex) del patch en si: su nombre de asset content-addressed (se verifica al bajarlo).
+    pub patch_blake3: String,
+    /// Tamano del patch en bytes (para decidir si conviene vs el full, y para la barra de progreso).
+    pub patch_size: u64,
 }
 
 impl SetManifest {
@@ -278,6 +298,7 @@ mod tests {
                     path: (*p).into(),
                     size: 1,
                     blake3: "00".into(),
+                    deltas: Vec::new(),
                 })
                 .collect(),
         }

@@ -155,6 +155,17 @@ En este orden, una vez completado todo lo anterior:
    recordado). `github::normalize_repo`/`valid_tag` sanean owner/repo/tag (charset real, sin
    `?#`/espacios/`/`/`..`) ANTES de armar el `base_url` que queda FIRMADO en el set-manifest.
 
+5. **Suscribirse a un REPO (sigue el ultimo release).** ✅ **HECHO (1.5.0).** Entrada
+   `repo:owner/repo` en `subscribed_sets`; `transport::resolve_latest_manifest` consulta
+   `/releases/latest` (sin login) y arma la URL del manifest. "Buscar actualizaciones" reporta fallos
+   (rate-limit). El amigo no re-pega la URL en cada update.
+
+6. **Delta intra-`.pck` (fase 3).** ✅ **HECHO (1.6.0).** Modulo `delta` (bsdiff via `qbsdiff`):
+   `publish` genera patches contra la publicacion anterior en `--out` (assets content-addressed) y
+   `sync` los aplica si el archivo viejo local matchea, re-verificando el BLAKE3 del resultado (si
+   falla, cae al full). Cambiar 1 carta de un mod ya no rebaja el `.pck` entero. Seguro: el delta es
+   pura optimizacion sobre el apply transaccional + verificacion por hash.
+
 **Sin empezar (proximo):** crear el repo de mods con UN click desde la GUI (hoy `ensure_repo` ya lo
 crea al publicar si el owner == login, pero no hay un flujo dedicado), registrar una OAuth App real
-para activar el device-flow (`OAUTH_CLIENT_ID`), y delta intra-`.pck` (fase 3).
+para activar el device-flow (`OAUTH_CLIENT_ID`), y comprimir el patch/transferencia (zstd).

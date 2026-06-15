@@ -334,6 +334,7 @@ mod tests {
             path: "Mod/a.bin".into(),
             size: body.len() as u64,
             blake3: "00".into(), // el hash lo verifica apply, no transport
+            deltas: Vec::new(),
         };
         let dest = std::env::temp_dir().join(format!("sts2_transport_mock_{port}.part"));
         let _ = std::fs::remove_file(&dest);

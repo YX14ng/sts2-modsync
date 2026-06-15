@@ -4,7 +4,7 @@
 //! huerfanos a la papelera). La descarga concreta la hace un `transport::ModSource`.
 
 use crate::hashing;
-use crate::manifest::{FileEntry, SetManifest};
+use crate::manifest::{Delta, FileEntry, SetManifest};
 use crate::transport::ModSource;
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeSet, HashMap};
@@ -12,10 +12,41 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
+/// Tope de tamaño (del archivo NUEVO) para usar un delta en el cliente: aplicar un patch tiene vivos
+/// a la vez el viejo + el patch + el resultado en RAM (~3x el archivo), asi que arriba de esto
+/// conviene el full (que se baja en streaming a disco, memoria baja). Los `.pck` tipicos de mods van
+/// debajo; a 256 MB el pico de RAM es ~768 MB, aceptable; mas grande no vale la pena.
+const DELTA_CLIENT_MAX: u64 = 256 * 1024 * 1024;
+
+/// Un archivo a transferir: el asset COMPLETO, o —si el cliente ya tiene una version anterior que
+/// algun `delta.from_blake3` matchea— un PATCH bsdiff (mucho mas chico) que se aplica sobre el viejo.
+#[derive(Debug, Clone)]
+pub struct Download {
+    /// El archivo destino con su `blake3`/`size`/`path` del manifest (lo que tiene que quedar).
+    pub entry: FileEntry,
+    /// Si `Some`, bajar este patch y aplicarlo sobre el archivo local actual (delta); si `None`,
+    /// bajar el asset completo. Si el delta falla en cualquier paso, `apply` cae al full.
+    pub delta: Option<Delta>,
+}
+
+impl Download {
+    /// Bytes que se transfieren por la red para este archivo: el patch si hay delta, si no el full.
+    pub fn fetch_bytes(&self) -> u64 {
+        self.delta
+            .as_ref()
+            .map_or(self.entry.size, |d| d.patch_size)
+    }
+
+    /// `true` si se va a transferir un patch (delta) en vez del archivo completo.
+    pub fn is_delta(&self) -> bool {
+        self.delta.is_some()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Plan {
-    /// Faltan localmente o el hash difiere => hay que bajarlos.
-    pub to_download: Vec<FileEntry>,
+    /// Faltan localmente o el hash difiere => hay que bajarlos (full o patch).
+    pub to_download: Vec<Download>,
     /// Ya correctos (hash coincide) => se omiten (esto es el ahorro).
     pub up_to_date: Vec<String>,
     /// HUERFANOS: estan local DENTRO de una carpeta gestionada pero no en el
@@ -37,6 +68,14 @@ pub struct Plan {
 impl Plan {
     pub fn is_noop(&self) -> bool {
         self.to_download.is_empty() && self.orphans.is_empty()
+    }
+
+    /// Pico de espacio en disco que la descarga necesita. NO alcanza con `bytes_to_download` (que
+    /// para un delta cuenta el patch, chico): cada `.part` que se materializa tiene el tamaño FULL
+    /// del archivo (un delta reconstruye el archivo ENTERO en el `.part`; un fallback baja el full),
+    /// y todos los `.part` coexisten hasta el commit. Por eso el pre-check de disco usa esta suma.
+    pub fn install_bytes(&self) -> u64 {
+        self.to_download.iter().map(|d| d.entry.size).sum()
     }
 }
 
@@ -60,8 +99,14 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
             if cache.matches(&local, &f.blake3) {
                 plan.up_to_date.push(f.path.clone());
             } else {
-                plan.bytes_to_download += f.size;
-                plan.to_download.push(f.clone());
+                // ¿Hay un PATCH chico aplicable (el cliente ya tiene una version vieja que matchea)?
+                // Si si, se transfiere el patch en vez del full; si no, el full.
+                let delta = pick_delta(f, &local, &mut cache);
+                plan.bytes_to_download += delta.as_ref().map_or(f.size, |d| d.patch_size);
+                plan.to_download.push(Download {
+                    entry: f.clone(),
+                    delta,
+                });
             }
         }
     }
@@ -88,6 +133,20 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
 /// "a/b/c" -> PathBuf con separadores nativos.
 fn rel_to_native(p: &str) -> PathBuf {
     p.split(['/', '\\']).collect()
+}
+
+/// Elige un patch para `f` si el archivo LOCAL viejo existe y su BLAKE3 matchea algun
+/// `delta.from_blake3` (y el patch es mas chico que el full, y el archivo no es enorme). `None` =>
+/// bajar el full. El `local_hash` sale del cache (ya lo calculo `matches`), asi no se re-hashea.
+fn pick_delta(f: &FileEntry, local: &Path, cache: &mut hashing::HashCache) -> Option<Delta> {
+    if f.deltas.is_empty() || f.size > DELTA_CLIENT_MAX || !local.is_file() {
+        return None;
+    }
+    let local_hash = cache.blake3(local).ok()?;
+    f.deltas
+        .iter()
+        .find(|d| d.from_blake3.eq_ignore_ascii_case(&local_hash) && d.patch_size < f.size)
+        .cloned()
 }
 
 /// Resultado de `apply`: nada se "traga" en silencio. Si algun huerfano no se pudo mandar a
@@ -132,12 +191,15 @@ pub fn apply(
         bail!("El juego esta ABIERTO — cerralo antes de instalar (lock de .dll/.pck).");
     }
 
-    // Pre-check de disco (best-effort): no arrancar una descarga que no va a entrar.
-    if plan.bytes_to_download > 0
+    // Pre-check de disco (best-effort): no arrancar una descarga que no va a entrar. Usa el tamaño
+    // FULL de lo que se baja (no `bytes_to_download`, que para los deltas cuenta solo el patch): cada
+    // `.part` materializa el archivo entero, y un delta que aplica/cae al full igual escribe el full.
+    let disk_needed = plan.install_bytes();
+    if disk_needed > 0
         && let Some(free) = free_space_for(mods_dir)
     {
-        let margin = (plan.bytes_to_download / 20).max(64 * 1024 * 1024);
-        let need = plan.bytes_to_download.saturating_add(margin);
+        let margin = (disk_needed / 20).max(64 * 1024 * 1024);
+        let need = disk_needed.saturating_add(margin);
         if free < need {
             bail!(
                 "espacio insuficiente en disco: hacen falta ~{} MB y hay {} MB libres",
@@ -152,19 +214,22 @@ pub fn apply(
 
     // Pre-carga opcional del set entero (torrent: se une al swarm y baja todo junto). Las
     // fuentes por-archivo (HTTP) lo ignoran (default no-op). Los bytes que reporte aca NO se
-    // recuentan en el loop de fetch.
-    source.prepare(&plan.to_download, &mut |n| {
+    // recuentan en el loop de fetch. Se le pasa lo que REALMENTE se va a bajar (patch o full).
+    let fetch_targets: Vec<FileEntry> = plan.to_download.iter().map(fetch_target).collect();
+    source.prepare(&fetch_targets, &mut |n| {
         done += n;
         on_progress(done);
         !cancel.load(Ordering::Relaxed)
     })?;
 
-    // 1+2) Bajar TODO a `.part` + verificar blake3 (reintenta de cero si quedo corrupto).
+    // 1+2) Bajar TODO a `.part` + verificar blake3 (reintenta de cero si quedo corrupto). Para los
+    // archivos con delta: bajar el patch, aplicarlo sobre el viejo, verificar; si falla, full.
     let mut staged: Vec<(PathBuf, PathBuf, usize)> = Vec::new(); // (part, dest, rank topologico)
-    for entry in &plan.to_download {
+    for download in &plan.to_download {
         if cancel.load(Ordering::Relaxed) {
             bail!("sincronizacion cancelada (no se instalo nada)");
         }
+        let entry = &download.entry;
         on_file(&entry.path);
         let dest = mods_dir.join(rel_to_native(&entry.path));
         if let Some(parent) = dest.parent() {
@@ -172,15 +237,32 @@ pub fn apply(
                 .with_context(|| format!("creando {}", parent.display()))?;
         }
         let part = part_path(&dest);
-        fetch_verified(
-            source,
-            &manifest.base_url,
-            entry,
-            &part,
-            &mut done,
-            on_progress,
-            cancel,
-        )?;
+        // Camino delta (si lo hay): exito => `.part` listo; si no se pudo, cae al full mas abajo.
+        let installed_via_delta = if download.delta.is_some() {
+            try_apply_delta(
+                source,
+                &manifest.base_url,
+                download,
+                &dest,
+                &part,
+                &mut done,
+                on_progress,
+                cancel,
+            )?
+        } else {
+            false
+        };
+        if !installed_via_delta {
+            fetch_verified(
+                source,
+                &manifest.base_url,
+                entry,
+                &part,
+                &mut done,
+                on_progress,
+                cancel,
+            )?;
+        }
         let mod_id = entry.path.split(['/', '\\']).next().unwrap_or("");
         let r = rank.get(mod_id).copied().unwrap_or(usize::MAX);
         staged.push((part, dest, r));
@@ -258,6 +340,112 @@ fn fetch_verified(
     }
     let _ = std::fs::remove_file(part_io.as_ref());
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no se pudo bajar {}", entry.path)))
+}
+
+/// El asset que se baja REALMENTE para un `Download`: el patch (content-addressed por su propio
+/// blake3) si hay delta, o el archivo full. Se usa para `prepare` (P2P) y para identificar el asset.
+fn fetch_target(d: &Download) -> FileEntry {
+    match &d.delta {
+        Some(delta) => FileEntry {
+            path: format!("{} [delta]", d.entry.path),
+            size: delta.patch_size,
+            blake3: delta.patch_blake3.clone(),
+            deltas: Vec::new(),
+        },
+        None => d.entry.clone(),
+    }
+}
+
+/// Subdir/temp para el patch bsdiff que se esta bajando. Termina en `.part` para que `is_part_file`
+/// lo trate como descarga en curso (excluido de huerfanos, barrido por `sweep_parts`).
+fn dpatch_path(dest: &Path) -> PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".dpatch.part");
+    PathBuf::from(s)
+}
+
+/// Intenta instalar `download` via DELTA (cliente): lee el archivo VIEJO local, baja el patch
+/// (verificando su propio BLAKE3), lo aplica, y verifica que el RESULTADO tenga el blake3 esperado;
+/// si todo va bien deja el nuevo contenido en `part` (listo para el rename transaccional). Devuelve
+/// `Ok(true)` si el delta se aplico y verifico (`part` listo); `Ok(false)` si NO se pudo usar (viejo
+/// ausente/cambiado, patch fallo, o el hash del resultado no coincide) -> el llamador baja el asset
+/// COMPLETO y se revierte el progreso del intento; `Err(..)` si el usuario cancelo (abortar).
+///
+/// Es seguro por construccion: el resultado SIEMPRE se verifica por BLAKE3 antes de aceptarlo, asi
+/// un patch malo nunca instala bytes equivocados (cae al full).
+#[allow(clippy::too_many_arguments)]
+fn try_apply_delta(
+    source: &dyn ModSource,
+    base_url: &str,
+    download: &Download,
+    dest: &Path,
+    part: &Path,
+    done: &mut u64,
+    on_progress: &mut dyn FnMut(u64),
+    cancel: &AtomicBool,
+) -> Result<bool> {
+    let Some(delta) = &download.delta else {
+        return Ok(false);
+    };
+    let entry = &download.entry;
+
+    // 1) El archivo VIEJO local tiene que existir y matchear `from_blake3` (pudo cambiar desde el
+    //    plan). Si no, no se puede aplicar este patch -> full.
+    let Ok(old) = std::fs::read(long_path(dest).as_ref()) else {
+        return Ok(false);
+    };
+    if !hashing::blake3_bytes(&old).eq_ignore_ascii_case(&delta.from_blake3) {
+        return Ok(false);
+    }
+
+    // 2) Bajar el patch a un temp, verificando su PROPIO blake3 (asset content-addressed).
+    let patch_part = dpatch_path(dest);
+    let patch_entry = FileEntry {
+        path: format!("{} [delta]", entry.path),
+        size: delta.patch_size,
+        blake3: delta.patch_blake3.clone(),
+        deltas: Vec::new(),
+    };
+    let base = *done;
+    let fetched = fetch_verified(
+        source,
+        base_url,
+        &patch_entry,
+        &patch_part,
+        done,
+        on_progress,
+        cancel,
+    );
+    if cancel.load(Ordering::Relaxed) {
+        let _ = std::fs::remove_file(long_path(&patch_part).as_ref());
+        bail!("sincronizacion cancelada");
+    }
+    if fetched.is_err() {
+        *done = base; // revertir el progreso del patch que no se pudo bajar
+        on_progress(*done);
+        let _ = std::fs::remove_file(long_path(&patch_part).as_ref());
+        return Ok(false); // -> full
+    }
+
+    // 3) Aplicar el patch sobre el viejo y verificar el RESULTADO contra el blake3 del manifest.
+    let applied = std::fs::read(long_path(&patch_part).as_ref())
+        .map_err(anyhow::Error::new)
+        .and_then(|patch_bytes| crate::delta::apply(&old, &patch_bytes, entry.size));
+    let _ = std::fs::remove_file(long_path(&patch_part).as_ref()); // el patch ya no se necesita
+    let new = match applied {
+        Ok(n) if hashing::blake3_bytes(&n).eq_ignore_ascii_case(&entry.blake3) => n,
+        _ => {
+            // patch corrupto, viejo equivocado, o el resultado no matchea -> revertir y caer al full.
+            *done = base;
+            on_progress(*done);
+            return Ok(false);
+        }
+    };
+
+    // 4) Dejar el nuevo contenido en `.part` (el commit lo renombra como cualquier descarga).
+    std::fs::write(long_path(part).as_ref(), &new)
+        .with_context(|| format!("escribiendo {}", part.display()))?;
+    Ok(true)
 }
 
 /// Subcarpeta reservada dentro de `mods/` para los backups del commit. NO es un mod (el
@@ -459,6 +647,7 @@ mod tests {
             path: path.into(),
             size: c.len() as u64,
             blake3: blake3::hash(&c).to_hex().to_string(),
+            deltas: Vec::new(),
         }
     }
 
@@ -512,6 +701,155 @@ mod tests {
             on_bytes(6);
             Ok(())
         }
+    }
+
+    /// Fuente content-addressed (como un Release real): sirve cada asset por su BLAKE3. Sirve
+    /// tanto fulls como patches; falla si el hash pedido no esta (para probar el fallback).
+    struct MapSource(std::collections::HashMap<String, Vec<u8>>);
+    impl ModSource for MapSource {
+        fn fetch(
+            &self,
+            _base: &str,
+            entry: &FileEntry,
+            dest: &Path,
+            on_bytes: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<()> {
+            let bytes = self
+                .0
+                .get(&entry.blake3)
+                .ok_or_else(|| anyhow::anyhow!("asset {} no encontrado", entry.blake3))?;
+            std::fs::write(dest, bytes)?;
+            on_bytes(bytes.len() as u64);
+            Ok(())
+        }
+    }
+
+    /// old/new realistas (bloque grande casi-identico) + el manifest con el delta correspondiente.
+    fn delta_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>, SetManifest) {
+        let old = b"contenido viejo del .pck de un mod ".repeat(500);
+        let mut new = old.clone();
+        new[100] = b'X';
+        new.extend_from_slice(b" + contenido nuevo apendido al final");
+        let patch = crate::delta::diff(&old, &new).unwrap();
+        let manifest = SetManifest {
+            schema: 1,
+            set_name: "t".into(),
+            set_version: "2".into(),
+            published_at: "now".into(),
+            signing_key_id: None,
+            base_url: "https://example/".into(),
+            magnet: None,
+            baselib_version: None,
+            mods: vec![ModEntry {
+                id: "Mod".into(),
+                version: "2".into(),
+                dependencies: vec![],
+                files: vec![FileEntry {
+                    path: "Mod/big.pck".into(),
+                    size: new.len() as u64,
+                    blake3: crate::hashing::blake3_bytes(&new),
+                    deltas: vec![Delta {
+                        from_blake3: crate::hashing::blake3_bytes(&old),
+                        patch_blake3: crate::hashing::blake3_bytes(&patch),
+                        patch_size: patch.len() as u64,
+                    }],
+                }],
+            }],
+        };
+        (old, new, patch, manifest)
+    }
+
+    #[test]
+    fn apply_usa_delta_y_reconstruye_la_version_nueva() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let base = std::env::temp_dir().join("sts2_modsync_delta_ok");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Mod")).unwrap();
+        let (old, new, patch, manifest) = delta_fixture();
+        // El cliente ya tiene la version VIEJA en disco.
+        std::fs::write(base.join("Mod").join("big.pck"), &old).unwrap();
+
+        let plan = plan(&manifest, &base).unwrap();
+        assert_eq!(plan.to_download.len(), 1);
+        assert!(
+            plan.to_download[0].is_delta(),
+            "deberia elegir el delta (el cliente tiene la version vieja)"
+        );
+        assert_eq!(
+            plan.bytes_to_download,
+            patch.len() as u64,
+            "deberia transferir solo el patch, no el full"
+        );
+        assert!(
+            (patch.len() as u64) < new.len() as u64,
+            "el patch deberia ser mas chico que el full"
+        );
+
+        // Fuente que sirve el patch (y el full, por si cae) por su hash.
+        let mut assets = std::collections::HashMap::new();
+        assets.insert(crate::hashing::blake3_bytes(&patch), patch.clone());
+        assets.insert(crate::hashing::blake3_bytes(&new), new.clone());
+        let source = MapSource(assets);
+
+        let report = apply(
+            &plan,
+            &manifest,
+            &base,
+            &source,
+            &mut |_| {},
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(report.installed, 1);
+        assert_eq!(
+            std::fs::read(base.join("Mod").join("big.pck")).unwrap(),
+            new,
+            "el delta no reconstruyo el archivo nuevo"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn apply_cae_al_full_si_el_patch_no_esta() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let base = std::env::temp_dir().join("sts2_modsync_delta_fallback");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Mod")).unwrap();
+        let (old, new, _patch, manifest) = delta_fixture();
+        std::fs::write(base.join("Mod").join("big.pck"), &old).unwrap();
+
+        let plan = plan(&manifest, &base).unwrap();
+        assert!(plan.to_download[0].is_delta());
+
+        // Fuente SIN el patch (solo el full): apply debe caer al full y reconstruir igual.
+        let mut assets = std::collections::HashMap::new();
+        assets.insert(crate::hashing::blake3_bytes(&new), new.clone());
+        let source = MapSource(assets);
+
+        let report = apply(
+            &plan,
+            &manifest,
+            &base,
+            &source,
+            &mut |_| {},
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(report.installed, 1);
+        assert_eq!(
+            std::fs::read(base.join("Mod").join("big.pck")).unwrap(),
+            new,
+            "el fallback al full no instalo la version nueva"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

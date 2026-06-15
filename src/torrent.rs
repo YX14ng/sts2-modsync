@@ -442,6 +442,7 @@ mod tests {
                 path: format!("Mod/file{i}.bin"),
                 size: *sz,
                 blake3: h.clone(),
+                deltas: Vec::new(),
             })
             .collect();
         let manifest = SetManifest {

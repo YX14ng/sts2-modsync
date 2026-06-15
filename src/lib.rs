@@ -6,6 +6,7 @@
 //! son capas de FASE 2 — ver HANDOFF.md.
 
 pub mod config;
+pub mod delta;
 pub mod detect;
 pub mod github;
 pub mod hashing;

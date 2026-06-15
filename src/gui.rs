@@ -1701,11 +1701,23 @@ impl App {
             "publicando (hasheando + subiendo al release)...".into(),
             move || {
                 let mods = modlist::scan(&install)?;
-                let prep = publish::prepare(&mods, &ids, &params)?;
+                let mut prep = publish::prepare(&mods, &ids, &params)?;
+                // Delta intra-archivo contra la publicacion anterior en out_dir (best-effort: si
+                // falla, se publica sin deltas). Los amigos al dia bajan solo el diff.
+                let deltas = publish::add_deltas(&mut prep, &out_dir).unwrap_or_default();
                 publish::write_out(&prep, &out_dir)?;
                 let url = publish::upload(&out_dir, &params.base_url)?;
+                let extra = if deltas.patches > 0 {
+                    format!(
+                        " · {} delta(s) ({:.1} MB)",
+                        deltas.patches,
+                        deltas.patch_bytes as f64 / 1.0e6
+                    )
+                } else {
+                    String::new()
+                };
                 Ok(format!(
-                    "Publicado: {} assets ({:.1} MB) → {url}",
+                    "Publicado: {} assets ({:.1} MB){extra} → {url}",
                     prep.assets.len(),
                     prep.total_bytes() as f64 / 1.0e6,
                 ))
@@ -1932,7 +1944,9 @@ impl App {
             self.sync.prog.finished,
         );
         let frac = if total > 0 {
-            done as f32 / total as f32
+            // Clamp a [0,1]: si un delta cae al full, se transfiere mas que lo planeado (el total
+            // contaba el patch) y `done` puede superar `total`; la barra no debe pasar el 100%.
+            (done as f32 / total as f32).clamp(0.0, 1.0)
         } else if finished && self.sync.prog.error.is_none() {
             1.0
         } else {
@@ -2420,11 +2434,16 @@ fn render_plan(ui: &mut egui::Ui, plan: &sync::Plan) {
             .max_height(140.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                for f in &plan.to_download {
+                for d in &plan.to_download {
+                    let tag = if d.is_delta() {
+                        format!("  ·  delta {:.1} KB", d.fetch_bytes() as f64 / 1024.0)
+                    } else {
+                        String::new()
+                    };
                     ui.label(format!(
-                        "  + {}   ({:.1} KB)",
-                        f.path,
-                        f.size as f64 / 1024.0
+                        "  + {}   ({:.1} KB){tag}",
+                        d.entry.path,
+                        d.entry.size as f64 / 1024.0
                     ));
                 }
                 if !plan.orphans.is_empty() {

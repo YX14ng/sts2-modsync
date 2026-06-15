@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.5.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.6.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -23,12 +23,15 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   armar el `base_url` firmado.
 - **1.5.0:** podes **suscribirte a un REPO** (`repo:owner/repo` en `subscribed_sets`) que sigue el
   ULTIMO release: `transport::resolve_latest_manifest` consulta `/releases/latest` (sin login) y arma
-  la URL del manifest; con el delta por BLAKE3, al actualizar **solo se baja lo que cambio**. Las
-  suscripciones por URL fija de antes siguen andando (sin migracion).
+  la URL del manifest. Las suscripciones por URL fija de antes siguen andando (sin migracion).
+- **1.6.0:** **delta intra-`.pck`** (modulo `delta`, bsdiff via `qbsdiff`): al actualizar un mod, el
+  amigo que ya tiene la version vieja baja **solo el diff**, no el `.pck` entero. `publish` genera los
+  patches contra la publicacion anterior en `--out`; `sync` elige el patch si el archivo viejo local
+  matchea un `delta.from_blake3` y verifica el BLAKE3 del resultado (si falla, cae al full). Seguro
+  por construccion: el delta es pura optimizacion, nunca puede instalar bytes equivocados.
 
 Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): crear el repo de
-mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, **delta intra-`.pck`** (que cambiar una
-carta no rebaje el `.pck` entero — el unico pedazo que falta para que "actualizar 1 mod" sea minimo).
+mods automatico con un click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
@@ -68,11 +71,14 @@ carta no rebaje el `.pck` entero — el unico pedazo que falta para que "actuali
 - **Mod manager:** `modlist` (escanea `mods/`+`mods_disabled/`, parsea `<id>.json`, deps/conflictos,
   orden de carga) · `manager` (enable/disable/install/uninstall = **MOVER carpetas**, juego cerrado)
   · `profile` (perfiles = conjuntos habilitados; puente con set-manifest) · `launch` (abrir el juego).
-- **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort) · `hashing` (blake3)
-  · `sync` (`plan()` + `apply()` transaccional) · `signing` (minisign verify) · `transport` (GitHub
-  Releases, `reqwest` blocking, **content-addressed por blake3**; el trait `ModSource` tiene un
-  `prepare()` opcional que un backend usa para pre-bajar el set entero) · `publish` (genera el
-  set-manifest + assets desde los mods y los SUBE al Release via `gh`, lado modder).
+- **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
+  · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
+  delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
+  resultado SIEMPRE se re-verifica por blake3, sino cae al full) · `signing` (minisign verify)
+  · `transport` (GitHub Releases, `reqwest` blocking, **content-addressed por blake3** —fulls Y
+  patches—; `resolve_latest_manifest` resuelve el ultimo release de un repo; el trait `ModSource`
+  tiene un `prepare()` opcional que un backend usa para pre-bajar el set entero) · `publish` (genera
+  el set-manifest + assets + **deltas** desde los mods y los SUBE al Release, lado modder).
 - **P2P (añadido, feature `p2p`):** `torrent` (librqbit + tokio, gateado): `create_set_torrent`
   arma el `.torrent` del dir de assets y el magnet (lo mete `publish` en el manifest ANTES de
   firmar) · `seed_blocking` seedea el dir de assets (archivos ya presentes) · `HybridSource`
@@ -93,10 +99,11 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   `sts2-modsync` abre la GUI si no hay subcomandos). Pestañas Mods/Sync/Perfiles/Publicar.
 - CLI: `cargo run -- list` (default) · `enable/disable <id>` · `launch` · `sync <set.json|url|owner/repo>`
   (dry-run; con `owner/repo` —o `repo:owner/repo`— sigue el ULTIMO release via `/releases/latest`)
-  · `publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>] [--no-upload]`
+  · `publish --name <s> --version <v> [--repo <owner/repo> | --base-url <url>] [--profile <p>] [--out <dir>] [--no-upload] [--no-delta]`
     (modder; por default SUBE al Release. El **`--repo` se RECUERDA** en `config.publish_repo`: la
     proxima vez podes omitirlo y publica OTRO release en el MISMO repo —el GUI deriva el `base_url`
-    del repo recordado—. `--base-url` sigue funcionando (legacy). `--no-upload` solo genera local)
+    del repo recordado—. `--base-url` sigue funcionando (legacy). `--no-upload` solo genera local.
+    Genera **deltas** contra la publicacion anterior en `--out` salvo `--no-delta`)
   · `update` (auto-update desde GitHub Releases de `YX14ng/sts2-modsync`)
   · `keygen` (par minisign del modder; pegar la pub en `signing::PUBLISHER_PUBKEY` para activar firma)
   · `github-login <token>` / `github-status` / `github-logout` (token de GitHub guardado SEGURO en el

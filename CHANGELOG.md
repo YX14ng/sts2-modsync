@@ -3,6 +3,24 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.6.0] - 2026-06-15 — Delta intra-`.pck` (al actualizar 1 mod, solo baja el diff)
+
+- **Update incremental DENTRO de un archivo:** si cambiás una carta de un mod, tus amigos que ya
+  tienen la version vieja del `.pck` **bajan solo el diff** (un patch bsdiff), no el `.pck` de 100 MB
+  entero. Es el ultimo pedazo que faltaba para que "actualizar un mod" sea verdaderamente minimo.
+- **publish** genera los patches contra la **publicacion anterior** que tengas en la carpeta de
+  salida (`set-manifest.json` viejo + `assets/`), y los sube como assets content-addressed. Cero
+  friccion si reusas la misma carpeta `--out`. `--no-delta` lo desactiva. Un patch se descarta si no
+  resulta mas chico que el full.
+- **sync** elige el patch cuando el archivo local viejo matchea (por BLAKE3) un `delta.from_blake3`
+  del manifest y el patch es mas chico; lo baja, lo aplica, y **verifica el BLAKE3 del resultado**.
+- **Seguro por construccion:** el patch es un asset content-addressed (su hash se verifica al bajarlo)
+  y el resultado de aplicarlo se re-verifica contra el `blake3` del manifest. Si algo falla (patch
+  corrupto, el archivo viejo cambio, etc.) la sync **cae a bajar el asset completo** — un delta nunca
+  puede instalar bytes equivocados ni romper la transaccion (sigue siendo `.part` + rename atomico).
+- Implementado con `qbsdiff` (bsdiff, pure-Rust salvo una dep C que compila en MSVC). Tope de tamaño
+  por las dudas (genera deltas hasta 600 MB, los aplica hasta 512 MB; arriba de eso, full en streaming).
+
 ## [1.5.0] - 2026-06-15 — Suscribirse a un REPO (sigue el ultimo release)
 
 - Ahora podes **suscribirte a un repo** (`usuario/repo`) en vez de a la URL de un release fijo. El
