@@ -3,6 +3,20 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.8.0] - 2026-06-15 — Nexus: API key + chequeo de version (auto-update fase 2a)
+
+- **Conexion con Nexus Mods** (modulo `nexus`): pegas tu **API Key personal** (de tu cuenta, en
+  Preferences -> API) y se guarda SEGURO en el llavero del SO (como el token de GitHub). CLI:
+  `nexus-login` / `nexus-status` / `nexus-logout`. GUI: campo "API Key de Nexus" en el detalle de un
+  mod de Nexus.
+- **Chequeo de version de mods de Nexus:** "Buscar actualizacion" / `mod-check` ahora consultan la API
+  de Nexus (`/v1/games/{game}/mods/{id}.json`) y muestran la version disponible, no solo "abrir".
+- **La DESCARGA automatica de Nexus sigue siendo fase 2b** (handler `nxm://`): por ahora, cuando hay
+  version nueva, el boton es "Abrir en Nexus para bajar" (Nexus exige el flujo nxm para usuarios gratis,
+  o Premium para el link directo). El chequeo de version SI funciona para todos con la API key.
+- Nota: Nexus no tiene un canal "beta" formal, asi que el toggle estable/beta solo aplica a GitHub;
+  para Nexus se usa la version headline del mod.
+
 ## [1.7.0] - 2026-06-15 — Auto-update de mods desde su upstream (GitHub) · fase 1
 
 - **Cada mod puede tener un ORIGEN** (su repo de GitHub o su pagina de Nexus) y el programa

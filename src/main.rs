@@ -64,6 +64,9 @@ fn main() -> Result<()> {
     if matches!(cmd, "github-login" | "github-logout" | "github-status") {
         return cmd_github(cmd, &args);
     }
+    if matches!(cmd, "nexus-login" | "nexus-logout" | "nexus-status") {
+        return cmd_nexus(cmd, &args);
+    }
 
     let cfg = config::load();
     let Some(install) = resolve_install(&cfg) else {
@@ -519,13 +522,28 @@ fn cmd_mod_check(install: &detect::Install, args: &[String]) -> Result<()> {
                     Err(e) => eprintln!("  [{}] error: {e:#}", m.id()),
                 }
             }
-            ModSource::Nexus { .. } => {
-                println!(
-                    "  [{}] Nexus ({}) — descarga auto: fase 2; abri {}",
-                    m.id(),
-                    src.label(),
-                    src.web_url()
-                );
+            ModSource::Nexus { game, mod_id } => {
+                if !sts2_modsync::nexus::is_connected() {
+                    println!(
+                        "  [{}] Nexus ({}) — conecta con `nexus-login` para chequear",
+                        m.id(),
+                        src.label()
+                    );
+                    continue;
+                }
+                match sts2_modsync::nexus::check(game, *mod_id, m.manifest.version.as_deref()) {
+                    Ok(Some(u)) => {
+                        println!(
+                            "  [{}] Nexus v? -> v{} — descarga auto: fase 2b; abri {}",
+                            m.id(),
+                            u.latest,
+                            src.web_url()
+                        );
+                        found += 1;
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("  [{}] Nexus error: {e:#}", m.id()),
+                }
             }
         }
     }
@@ -549,7 +567,7 @@ fn cmd_mod_update(install: &detect::Install, args: &[String]) -> Result<()> {
     })?;
     let ModSource::GitHub { owner, repo } = &src else {
         bail!(
-            "{id} es de Nexus ({}): la descarga auto es la fase 2; abri {}",
+            "{id} es de Nexus ({}): la descarga auto es la fase 2b (handler nxm://); abri {}",
             src.label(),
             src.web_url()
         );
@@ -617,25 +635,77 @@ fn cmd_github(cmd: &str, args: &[String]) -> Result<()> {
 /// Lee el token de login SIN que quede en el historial del shell / la lista de procesos:
 /// de la env `GITHUB_TOKEN`, o (con aviso) de un argumento posicional, o de stdin.
 fn read_login_token(args: &[String]) -> Result<String> {
-    if let Ok(t) = std::env::var("GITHUB_TOKEN")
+    read_secret(args, "GITHUB_TOKEN", "token de GitHub")
+}
+
+/// Lee un secreto (token/API key) SIN que quede en el historial del shell / la lista de procesos:
+/// de la env `env`, o (con aviso) de un argumento posicional, o de stdin.
+fn read_secret(args: &[String], env: &str, label: &str) -> Result<String> {
+    if let Ok(t) = std::env::var(env)
         && !t.trim().is_empty()
     {
         return Ok(t);
     }
     if let Some(t) = args.get(1) {
         eprintln!(
-            "[aviso] pasar el token por argumento queda en el historial del shell; preferi la env GITHUB_TOKEN o stdin."
+            "[aviso] pasar el {label} por argumento queda en el historial del shell; preferi la env {env} o stdin."
         );
         return Ok(t.clone());
     }
     use std::io::Write;
-    eprint!("Pega el token de GitHub y Enter: ");
+    eprint!("Pega el {label} y Enter: ");
     std::io::stderr().flush().ok();
     let mut line = String::new();
     std::io::stdin()
         .read_line(&mut line)
-        .context("leyendo el token de stdin")?;
+        .with_context(|| format!("leyendo el {label} de stdin"))?;
     Ok(line)
+}
+
+/// `nexus-login` / `nexus-logout` / `nexus-status`: gestiona la API Key de Nexus (guardada SEGURO en
+/// el llavero del SO) que usa el auto-update de mods para chequear versiones de mods de Nexus.
+fn cmd_nexus(cmd: &str, args: &[String]) -> Result<()> {
+    use sts2_modsync::nexus;
+    match cmd {
+        "nexus-login" => {
+            let key = read_secret(args, "NEXUS_APIKEY", "API Key de Nexus")?;
+            let key = key.trim();
+            if key.is_empty() {
+                bail!("API key vacia");
+            }
+            nexus::store_key(key)?;
+            match nexus::validate() {
+                Ok(u) => {
+                    let prem = if u.is_premium { " (Premium)" } else { "" };
+                    println!(
+                        "conectado a Nexus como {}{prem} (key guardada en el llavero)",
+                        u.name
+                    );
+                }
+                Err(e) => {
+                    let _ = nexus::clear_key(); // no dejar una key invalida guardada
+                    return Err(e);
+                }
+            }
+        }
+        "nexus-logout" => {
+            nexus::clear_key()?;
+            println!("desconectado de Nexus (API key borrada del llavero).");
+        }
+        "nexus-status" => match nexus::is_connected() {
+            true => match nexus::validate() {
+                Ok(u) => println!(
+                    "conectado como {}{}.",
+                    u.name,
+                    if u.is_premium { " (Premium)" } else { "" }
+                ),
+                Err(e) => println!("hay una API key guardada pero NO valida: {e:#}"),
+            },
+            false => println!("no conectado (usa `nexus-login`)."),
+        },
+        _ => unreachable!(),
+    }
+    Ok(())
 }
 
 /// `update`: chequea el ultimo release en GitHub y, si hay una version nueva, se actualiza.
@@ -776,6 +846,10 @@ fn print_help() {
     );
     println!("  github-status         muestra si estas conectado a GitHub");
     println!("  github-logout         borra el token guardado");
+    println!(
+        "  nexus-login           guarda tu API Key de Nexus en el llavero (lee de NEXUS_APIKEY o stdin); chequea versiones de mods de Nexus"
+    );
+    println!("  nexus-status / nexus-logout   estado / desconectar de Nexus");
     println!(
         "\nGUI (mod manager con pestañas): corre el exe SIN argumentos (o `cargo run --features gui`)."
     );

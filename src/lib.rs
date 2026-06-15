@@ -17,6 +17,7 @@ pub mod manifest;
 pub mod modlist;
 pub mod modsource;
 pub mod modupdate;
+pub mod nexus;
 pub mod profile;
 pub mod publish;
 pub mod signing;

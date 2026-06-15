@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.7.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.8.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -33,11 +33,15 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   Nexus) sale del `<id>.json` (`repository`/`url`/`homepage`) o lo pega el usuario (`config.mod_sources`,
   prioridad). `modupdate::check_github` lista `/releases` y elige por canal GLOBAL (`config.prefer_beta`:
   beta = pre-releases, estable = MAIN) — el mapeo BETA/MAIN es limpio en GitHub. `modupdate::apply` baja
-  el asset `.zip` e instala con `manager::install_from_zip(overwrite)` preservando enable/disable. GitHub
-  = auto completo; **Nexus = solo chequeo/abrir (fase 2: handler `nxm://`, sin empezar).**
+  el asset `.zip` e instala con `manager::install_update_zip` (valida el id == el mod), preservando
+  enable/disable y recordando el tag (`config.mod_installed_tag`). `mod_dir` deshabilitado se respeta.
+- **1.8.0 (fase 2a):** **Nexus.** Modulo `nexus`: API Key personal en el llavero (`store_key`/`load_key`),
+  `validate()` (usuario/Premium) y `check(game, mod_id, current)` (version del mod via la API v1).
+  `modupdate::check_nexus` lo envuelve en un `ModUpdate` con `asset_url` VACIO (sin auto-download).
+  La descarga auto de Nexus es **fase 2b** (handler `nxm://`, sin empezar): hoy boton "Abrir en Nexus".
 
-Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): **fase 2 del
-auto-update de mods** (API de Nexus + handler `nxm://`), crear el repo de mods automatico con un
+Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): **fase 2b** (handler
+`nxm://` + `download_link` para que la descarga de Nexus sea automatica), crear el repo de mods con un
 click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
@@ -79,8 +83,9 @@ click, OAuth `OAUTH_CLIENT_ID` real, comprimir el patch/transferencia (zstd).
   orden de carga; `ModManifest.source_hint()` lee el upstream del mod) · `manager` (enable/disable/
   install/uninstall = **MOVER carpetas**, juego cerrado) · `profile` (perfiles = conjuntos habilitados)
   · `launch` (abrir el juego) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
-  `modupdate` (auto-update de un mod desde su upstream: `check_github` por canal + `apply` baja+instala;
-  Nexus es fase 2).
+  `modupdate` (auto-update de un mod desde su upstream: `check_github`/`check_nexus` + `apply`
+  baja+instala) · `nexus` (API v1 de Nexus: API key en el llavero + `validate` + `check` de version;
+  la descarga auto es fase 2b).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
   delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
@@ -128,6 +133,8 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   · `github-login <token>` / `github-status` / `github-logout` (token de GitHub guardado SEGURO en el
     llavero del SO via `keyring`; con login, `publish` sube por la **API REST** sin el `gh` CLI —
     modulo `github`: PAT o OAuth device-flow si se setea `github::OAUTH_CLIENT_ID`)
+  · `nexus-login` / `nexus-status` / `nexus-logout` (API Key de Nexus guardada en el llavero; lee de
+    `NEXUS_APIKEY` o stdin; habilita el chequeo de version de mods de Nexus — `mod-check`/GUI)
   · `seed <out_dir>` (P2P: seedea un set publicado por torrent; bloquea hasta Ctrl-C; necesita
     `--features p2p`. En el GUI: boton "Seedear este set (P2P)" en la pestaña Publicar).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.

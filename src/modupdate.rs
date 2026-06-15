@@ -265,6 +265,29 @@ fn unique_suffix() -> u128 {
         .unwrap_or(0)
 }
 
+/// Chequeo de un mod cuyo origen es NEXUS (fase 2a: solo VERSION, la descarga automatica es 2b).
+/// Construye un `ModUpdate` con `asset_url` VACIO: la UI/CLI muestran "Abrir en Nexus" en vez de
+/// "Actualizar" (no hay descarga directa todavia). `nexus_mod_id` es el id del mod EN Nexus.
+pub fn check_nexus(
+    mod_id: &str,
+    game: &str,
+    nexus_mod_id: u64,
+    current: Option<&str>,
+) -> Result<Option<ModUpdate>> {
+    let Some(nx) = crate::nexus::check(game, nexus_mod_id, current)? else {
+        return Ok(None);
+    };
+    Ok(Some(ModUpdate {
+        mod_id: mod_id.to_string(),
+        current: current.map(str::to_string),
+        latest: nx.latest.clone(),
+        tag: nx.latest,
+        prerelease: false,
+        asset_url: String::new(), // Nexus: sin descarga directa en fase 2a
+        html_url: format!("https://www.nexusmods.com/{game}/mods/{nexus_mod_id}"),
+    }))
+}
+
 /// El origen efectivo de un mod: el override del usuario en `config.mod_sources` (prioridad) o el
 /// hint declarado en el `<id>.json`. `None` si no hay ninguno.
 pub fn effective_source(

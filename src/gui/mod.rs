@@ -154,6 +154,13 @@ struct App {
     mod_updates: std::collections::HashMap<String, crate::modupdate::ModUpdate>,
     #[allow(clippy::type_complexity)]
     mod_update_job: Option<Receiver<(String, Result<Option<crate::modupdate::ModUpdate>, String>)>>,
+    // Nexus: conexion con la API Key (para chequear versiones de mods de Nexus). `nexus_user` = el
+    // usuario conectado (None = sin chequear/sin conectar); `nexus_key_input` = el campo para pegar
+    // la key; `nexus_job` = worker de validar+guardar (Ok(nombre) | Err).
+    nexus_user: Option<String>,
+    nexus_key_input: String,
+    nexus_job: Option<Receiver<Result<String, String>>>,
+    nexus_connected: bool, // cache de `nexus::is_connected()` (evita leer el llavero cada frame)
 
     // Accion en curso (enable/disable/install/uninstall/aplicar perfil): una a la vez.
     action_job: Option<Receiver<Result<String, String>>>,
@@ -244,6 +251,10 @@ impl App {
             mod_source_input: String::new(),
             mod_updates: std::collections::HashMap::new(),
             mod_update_job: None,
+            nexus_user: None,
+            nexus_key_input: String::new(),
+            nexus_job: None,
+            nexus_connected: crate::nexus::is_connected(),
             dark_mode: true,
         };
         app.try_detect();
@@ -450,6 +461,7 @@ impl eframe::App for App {
         self.poll_fetch_job(&ctx);
         self.poll_set_check(&ctx);
         self.poll_mod_update(&ctx);
+        self.poll_nexus_job();
         self.poll_gh_job(&ctx);
         if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
             self.kick_scan(&ctx);

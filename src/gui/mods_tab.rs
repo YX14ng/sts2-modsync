@@ -332,7 +332,14 @@ impl App {
                         ui.spinner();
                     }
                 });
-                if let Some(upd) = self.mod_updates.get(&id).cloned() {
+                // Solo una entrada CON asset (GitHub); una stale de Nexus (asset_url vacio) no se
+                // puede "Actualizar" desde aca (su descarga es 2b).
+                if let Some(upd) = self
+                    .mod_updates
+                    .get(&id)
+                    .filter(|u| !u.asset_url.is_empty())
+                    .cloned()
+                {
                     let chan = if upd.prerelease { "beta" } else { "estable" };
                     ui.colored_label(
                         ACCENT,
@@ -352,11 +359,75 @@ impl App {
                     }
                 }
             } else {
-                // Nexus: la descarga auto necesita el handler nxm:// (fase 2); por ahora, abrir.
-                ui.horizontal(|ui| {
-                    ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
-                    ui.label(egui::RichText::new("(descarga automatica de Nexus: fase 2)").weak());
-                });
+                // Nexus: chequeo de version via API (fase 2a); la descarga auto (handler nxm://) es 2b.
+                if self.nexus_connected {
+                    ui.horizontal(|ui| {
+                        let checking = self.mod_update_job.is_some();
+                        if ui
+                            .add_enabled(!checking, egui::Button::new("Buscar actualizacion"))
+                            .clicked()
+                        {
+                            self.check_mod_update(ctx, id.clone(), src.clone());
+                        }
+                        if checking {
+                            ui.spinner();
+                        }
+                        if let Some(name) = &self.nexus_user {
+                            ui.label(egui::RichText::new(format!("Nexus: {name}")).weak());
+                        }
+                        if ui.small_button("desconectar").clicked() {
+                            self.nexus_disconnect();
+                        }
+                    });
+                    if let Some(upd) = self.mod_updates.get(&id) {
+                        ui.colored_label(
+                            ACCENT,
+                            format!(
+                                "● v{} disponible (Nexus) · tenes v{}",
+                                upd.latest,
+                                upd.current.as_deref().unwrap_or("?")
+                            ),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
+                        ui.label(
+                            egui::RichText::new("(descarga automatica de Nexus: fase 2b)").weak(),
+                        );
+                    });
+                } else {
+                    // Sin API key: pegar para conectar y poder chequear versiones de Nexus.
+                    ui.label(
+                        egui::RichText::new(
+                            "Conecta tu API Key de Nexus para chequear versiones (Preferences -> API en tu cuenta):",
+                        )
+                        .weak(),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.nexus_key_input)
+                                .hint_text("API Key de Nexus")
+                                .password(true)
+                                .desired_width(280.0),
+                        );
+                        let busy = self.nexus_job.is_some();
+                        if ui
+                            .add_enabled(
+                                !busy && !self.nexus_key_input.trim().is_empty(),
+                                egui::Button::new("Conectar"),
+                            )
+                            .clicked()
+                        {
+                            self.nexus_connect(ctx);
+                        }
+                        if busy {
+                            ui.spinner();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to("Abrir en Nexus para bajar", src.web_url());
+                    });
+                }
             }
         }
     }
@@ -422,11 +493,8 @@ impl App {
 
     // --- auto-update de mods (upstream GitHub) ------------------------------
 
-    /// Chequea en un hilo si hay version nueva de `id` en su origen GitHub (segun el canal global).
+    /// Chequea en un hilo si hay version nueva de `id` en su origen (GitHub por canal, o Nexus via API).
     fn check_mod_update(&mut self, ctx: &egui::Context, id: String, src: ModSource) {
-        let ModSource::GitHub { owner, repo } = src else {
-            return; // Nexus: el chequeo via API es fase 2
-        };
         let current = self
             .mods
             .iter()
@@ -438,18 +506,77 @@ impl App {
         self.mod_update_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let res = crate::modupdate::check_github(
-                &owner,
-                &repo,
-                &id,
-                current.as_deref(),
-                installed_tag.as_deref(),
-                prefer_beta,
-            )
+            let res = match src {
+                ModSource::GitHub { owner, repo } => crate::modupdate::check_github(
+                    &owner,
+                    &repo,
+                    &id,
+                    current.as_deref(),
+                    installed_tag.as_deref(),
+                    prefer_beta,
+                ),
+                ModSource::Nexus { game, mod_id } => {
+                    crate::modupdate::check_nexus(&id, &game, mod_id, current.as_deref())
+                }
+            }
             .map_err(|e| format!("{e:#}"));
             let _ = tx.send((id, res));
             ctx.request_repaint();
         });
+    }
+
+    /// Conecta la API Key de Nexus: la guarda en el llavero y la valida en un hilo.
+    fn nexus_connect(&mut self, ctx: &egui::Context) {
+        let key = self.nexus_key_input.trim().to_string();
+        if key.is_empty() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.nexus_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> std::result::Result<String, String> {
+                crate::nexus::store_key(&key).map_err(|e| format!("{e:#}"))?;
+                let user = crate::nexus::validate().map_err(|e| {
+                    // key invalida: no dejarla guardada.
+                    let _ = crate::nexus::clear_key();
+                    format!("{e:#}")
+                })?;
+                Ok(user.name)
+            })();
+            let _ = tx.send(res);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Desconecta Nexus: borra la API key del llavero y limpia el cache de conexion.
+    fn nexus_disconnect(&mut self) {
+        let _ = crate::nexus::clear_key();
+        self.nexus_connected = false;
+        self.nexus_user = None;
+        self.show_toast("desconectado de Nexus", false);
+    }
+
+    pub(super) fn poll_nexus_job(&mut self) {
+        let Some(rx) = &self.nexus_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(name)) => {
+                self.nexus_user = Some(name.clone());
+                self.nexus_connected = true;
+                self.nexus_key_input.clear();
+                self.nexus_job = None;
+                self.show_toast(format!("Nexus conectado como {name}"), false);
+            }
+            Ok(Err(e)) => {
+                self.nexus_user = None;
+                self.nexus_job = None;
+                self.show_toast(e, true);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => self.nexus_job = None,
+        }
     }
 
     pub(super) fn poll_mod_update(&mut self, ctx: &egui::Context) {
