@@ -169,6 +169,15 @@ struct App {
     mod_updates: std::collections::HashMap<String, crate::modupdate::ModUpdate>,
     #[allow(clippy::type_complexity)]
     mod_update_job: Option<Receiver<(String, Result<Option<crate::modupdate::ModUpdate>, String>)>>,
+    // Chequeo de updates de TODOS los mods de una (worker): devuelve (updates hallados, cuantos no
+    // se pudieron chequear). Pesa varias llamadas a la red, por eso va en su propio worker.
+    #[allow(clippy::type_complexity)]
+    mod_update_all_job: Option<
+        Receiver<(
+            std::collections::HashMap<String, crate::modupdate::ModUpdate>,
+            usize,
+        )>,
+    >,
     // Nexus: conexion con la API Key (para chequear versiones de mods de Nexus). `nexus_user` = el
     // usuario conectado (None = sin chequear/sin conectar); `nexus_key_input` = el campo para pegar
     // la key; `nexus_job` = worker de validar+guardar (Ok(nombre) | Err).
@@ -288,6 +297,7 @@ impl App {
             mod_source_input: String::new(),
             mod_updates: std::collections::HashMap::new(),
             mod_update_job: None,
+            mod_update_all_job: None,
             nexus_user: None,
             nexus_key_input: String::new(),
             nexus_job: None,
@@ -500,6 +510,7 @@ impl eframe::App for App {
         self.poll_fetch_job(&ctx);
         self.poll_set_check(&ctx);
         self.poll_mod_update(&ctx);
+        self.poll_mod_update_all(&ctx);
         self.poll_nexus_job();
         self.poll_gh_job(&ctx);
         self.poll_gh_repo_job(&ctx);

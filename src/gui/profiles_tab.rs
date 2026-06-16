@@ -87,9 +87,11 @@ impl App {
             }
         });
         if !self.share_code.is_empty() {
-            // Campo selectable (solo-lectura efectivo: se regenera) para copiar a mano si hace falta.
+            // Campo de SOLO LECTURA pero seleccionable (para copiar a mano): se le pasa un CLON, asi
+            // cualquier edicion se descarta y el codigo no se puede corromper sin querer.
+            let mut shown = self.share_code.clone();
             ui.add(
-                egui::TextEdit::singleline(&mut self.share_code)
+                egui::TextEdit::singleline(&mut shown)
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace),
             );

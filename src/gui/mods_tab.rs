@@ -65,6 +65,37 @@ impl App {
             self.install_picked(ctx, true);
         }
 
+        // Chequear updates de TODOS los mods de una (varias llamadas a la red en un worker).
+        let mut check_all = false;
+        ui.horizontal(|ui| {
+            let checking = self.mod_update_all_job.is_some();
+            if ui
+                .add_enabled(
+                    !checking,
+                    egui::Button::new("Buscar actualizaciones de todos los mods"),
+                )
+                .on_hover_text(
+                    "Revisa el upstream de cada mod con origen conocido. Sin login de GitHub, el \
+                     limite anonimo (60/h) puede no alcanzar para muchos mods.",
+                )
+                .clicked()
+            {
+                check_all = true;
+            }
+            if checking {
+                ui.spinner();
+                ui.label(egui::RichText::new("chequeando todos...").weak());
+            } else {
+                let n = self.mod_updates.len();
+                if n > 0 {
+                    ui.colored_label(ACCENT, format!("● {n} con actualizacion"));
+                }
+            }
+        });
+        if check_all {
+            self.check_all_updates(ctx);
+        }
+
         if !self.busy.is_empty() {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -191,6 +222,8 @@ impl App {
                             let ver = m.manifest.version.clone().unwrap_or_else(|| "?".into());
                             let size = human_size(m.size_bytes);
                             let is_sel = self.selected.as_deref() == Some(id.as_str());
+                            // ¿Hay una actualizacion hallada para este mod? (marca de la lista).
+                            let has_update = self.mod_updates.contains_key(id.as_str());
 
                             ui.horizontal(|ui| {
                                 if ui
@@ -205,6 +238,11 @@ impl App {
                                 }
                                 if gameplay {
                                     ui.colored_label(WARN, "gameplay");
+                                }
+                                if has_update {
+                                    ui.colored_label(ACCENT, "● update").on_hover_text(
+                                        "Hay una version nueva — abri el detalle para actualizar.",
+                                    );
                                 }
                             });
                         }
@@ -651,6 +689,94 @@ impl App {
             let _ = tx.send((id, res));
             ctx.request_repaint();
         });
+    }
+
+    /// Chequea de UNA si hay version nueva de TODOS los mods con origen conocido. Pesa varias
+    /// llamadas a la red (una por mod), por eso corre en un worker; reporta cuantos NO se pudieron
+    /// chequear (rate-limit de GitHub sin login, sin conexion). Los de Nexus se saltean si no hay
+    /// API key conectada (no se cuentan como fallo).
+    fn check_all_updates(&mut self, ctx: &egui::Context) {
+        if self.mod_update_all_job.is_some() {
+            return;
+        }
+        let mods = self.mods.clone();
+        let cfg = self.cfg.clone();
+        let premium = self.nexus_premium;
+        let nexus_connected = self.nexus_connected;
+        let (tx, rx) = channel();
+        self.mod_update_all_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let mut found = std::collections::HashMap::new();
+            let mut failed = 0usize;
+            for m in &mods {
+                let Some(src) = crate::modupdate::effective_source(m, &cfg) else {
+                    continue;
+                };
+                let current = m.manifest.version.as_deref();
+                let installed_tag = cfg.mod_installed_tag.get(m.id()).map(String::as_str);
+                let res = match src {
+                    ModSource::GitHub { owner, repo } => crate::modupdate::check_github(
+                        &owner,
+                        &repo,
+                        m.id(),
+                        current,
+                        installed_tag,
+                        cfg.prefer_beta,
+                    ),
+                    ModSource::Nexus { game, mod_id } => {
+                        if !nexus_connected {
+                            continue; // sin API key no se puede chequear Nexus; no es un "fallo"
+                        }
+                        crate::modupdate::check_nexus(
+                            m.id(),
+                            &game,
+                            mod_id,
+                            current,
+                            installed_tag,
+                            premium,
+                        )
+                    }
+                };
+                match res {
+                    Ok(Some(upd)) => {
+                        found.insert(m.id().to_string(), upd);
+                    }
+                    Ok(None) => {}
+                    Err(_) => failed += 1,
+                }
+            }
+            let _ = tx.send((found, failed));
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_mod_update_all(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.mod_update_all_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((found, failed)) => {
+                let n = found.len();
+                for (id, upd) in found {
+                    self.mod_updates.insert(id, upd);
+                }
+                self.mod_update_all_job = None;
+                let mut msg = if n == 0 {
+                    "todos los mods estan al dia".to_string()
+                } else {
+                    format!("{n} mod(s) con actualizacion (marcados con ● update)")
+                };
+                if failed > 0 {
+                    msg.push_str(&format!(
+                        " · {failed} no se pudieron chequear (¿rate-limit de GitHub? conecta GitHub para 5000/h)"
+                    ));
+                }
+                self.show_toast(msg, failed > 0 && n == 0);
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint(),
+            Err(TryRecvError::Disconnected) => self.mod_update_all_job = None,
+        }
     }
 
     /// Valida UNA vez la API key guardada (whoami -> nombre + Premium). Best-effort y SILENCIOSO: si

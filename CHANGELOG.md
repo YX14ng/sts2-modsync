@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.17.0] - 2026-06-15 — buscar actualizaciones de TODOS los mods de una
+
+- **"Buscar actualizaciones de todos los mods"** (pestaña Mods): un boton revisa el upstream de cada
+  mod con origen conocido (GitHub/Nexus) en un worker y marca los que tienen version nueva con un
+  **● update** en la lista; el detalle de cada uno sigue teniendo "Actualizar". Reporta cuantos no se
+  pudieron chequear (rate-limit anonimo de GitHub 60/h — recomienda `github-login` para 5000/h). Los
+  de Nexus se saltean si no hay API key conectada (no cuentan como fallo). (CLI: `mod-check` ya lo hacia.)
+- Polish: el campo del codigo compartible (pestaña Perfiles) es de SOLO LECTURA seleccionable — ya no
+  se puede editar/corromper sin querer.
+
 ## [1.16.0] - 2026-06-15 — instalar mods de Nexus en `.7z` (no solo `.zip`)
 
 - **Los mods de Nexus en `.7z` ahora se instalan directo** (antes se guardaban a Descargas para
