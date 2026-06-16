@@ -3,6 +3,7 @@
 //! forma TRANSACCIONAL (baja a `.part` + verifica BLAKE3, recien entonces renombra; manda
 //! huerfanos a la papelera). La descarga concreta la hace un `transport::ModSource`.
 
+use crate::detect::Install;
 use crate::hashing;
 use crate::manifest::{Delta, FileEntry, SetManifest};
 use crate::transport::ModSource;
@@ -577,6 +578,58 @@ fn sweep_parts(manifest: &SetManifest, mods_dir: &Path) {
     }
 }
 
+/// Carpetas DUPLICADAS de un id gestionado a limpiar tras instalar: cualquier carpeta (en `mods/`
+/// o `mods_disabled/`) que declare un id del set PERO no sea la canonica `mods/<id>/`. Pura
+/// seleccion (no borra). Solo propone una copia si la canonica `mods/<id>/` EXISTE — nunca borra la
+/// UNICA copia de un mod. Jamas mira ids fuera de `managed_ids()` (mods ajenos quedan intactos).
+fn duplicate_folders_to_clean(manifest: &SetManifest, mods_dir: &Path) -> Vec<PathBuf> {
+    let managed = manifest.managed_ids();
+    let mut bases = vec![mods_dir.to_path_buf()];
+    if let Some(parent) = mods_dir.parent() {
+        bases.push(parent.join(crate::modlist::DISABLED_DIRNAME));
+    }
+    let mut out = Vec::new();
+    for base in bases {
+        let Ok(rd) = std::fs::read_dir(&base) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let Some(m) = crate::modlist::read_manifest(&p) else {
+                continue;
+            };
+            if !managed.contains(&m.id) {
+                continue;
+            }
+            let canonical = mods_dir.join(&m.id);
+            // No tocar nada si no hay copia canonica (no borrar la unica copia); y la canonica
+            // (`mods/<id>/`, lo que el sync acaba de instalar/dejar) se queda siempre.
+            if !canonical.is_dir() || p == canonical {
+                continue;
+            }
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Tras una sync exitosa, manda a la PAPELERA (reversible) las carpetas duplicadas de los ids del
+/// set que tengan OTRO nombre que la canonica `mods/<id>/` (o esten en `mods_disabled/`). Asi un
+/// amigo que ya tenia un mod en una carpeta con otro nombre (p.ej. `SuperMod-v2/`) no queda con DOS
+/// copias del mismo mod cargando a la vez —lo que cambia el room-hash de multiplayer y lo deja afuera
+/// del lobby—. Best-effort: devuelve las que SE pudieron mandar a la papelera. La guarda de
+/// `manager::trash_mod_dir` (juego cerrado + hija directa de `mods/`/`mods_disabled/`) asegura que
+/// nunca se toca nada fuera del area gestionada.
+pub fn clean_duplicate_folders(manifest: &SetManifest, install: &Install) -> Vec<PathBuf> {
+    duplicate_folders_to_clean(manifest, &install.mods_dir)
+        .into_iter()
+        .filter(|p| crate::manager::trash_mod_dir(install, p).is_ok())
+        .collect()
+}
+
 /// Espacio libre (bytes) en el volumen que contiene `path`, si se puede determinar.
 /// Best-effort: `None` si no se halla el disco (el pre-check se omite, no se bloquea).
 fn free_space_for(path: &Path) -> Option<u64> {
@@ -1104,6 +1157,58 @@ mod tests {
             let rel = PathBuf::from(format!("{long}\\f.dll"));
             assert_eq!(long_path(&rel).as_ref(), rel.as_path());
         }
+    }
+
+    /// Crea una carpeta de mod `<base>/<folder>` con un `<folder>.json` que declara `id`.
+    fn mk_mod(base: &Path, folder: &str, id: &str) {
+        let dir = base.join(folder);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{folder}.json")),
+            format!(r#"{{"id":"{id}"}}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_folders_to_clean_encuentra_copias_con_otro_nombre() {
+        let base = std::env::temp_dir().join("sts2_modsync_dupfolders");
+        let _ = std::fs::remove_dir_all(&base);
+        let mods = base.join("mods");
+        let disabled = base.join(crate::modlist::DISABLED_DIRNAME);
+        mk_mod(&mods, "Mod", "Mod"); // canonica (keeper)
+        mk_mod(&mods, "Mod-v2", "Mod"); // copia habilitada con otro nombre -> limpiar
+        mk_mod(&disabled, "Mod-bak", "Mod"); // copia deshabilitada -> limpiar
+        mk_mod(&mods, "Otro", "Otro"); // mod ajeno NO gestionado -> intacto
+
+        let manifest = manifest_one("Mod", "Mod/a.txt");
+        let dups = duplicate_folders_to_clean(&manifest, &mods);
+        let names: BTreeSet<String> = dups
+            .iter()
+            .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        assert!(names.contains("Mod-v2"), "falta la copia con otro nombre");
+        assert!(names.contains("Mod-bak"), "falta la copia deshabilitada");
+        assert!(
+            !names.contains("Mod"),
+            "NO debe limpiar la carpeta canonica"
+        );
+        assert!(!names.contains("Otro"), "NO debe tocar un mod ajeno");
+        assert_eq!(dups.len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn duplicate_folders_to_clean_no_borra_la_unica_copia() {
+        // Si NO existe la canonica `mods/<id>/`, una copia con otro nombre es la UNICA -> no tocarla
+        // (no dejar al usuario sin el mod).
+        let base = std::env::temp_dir().join("sts2_modsync_dupfolders_solo");
+        let _ = std::fs::remove_dir_all(&base);
+        let mods = base.join("mods");
+        mk_mod(&mods, "Mod-v2", "Mod"); // unica copia, con otro nombre, SIN canonica
+        let manifest = manifest_one("Mod", "Mod/a.txt");
+        assert!(duplicate_folders_to_clean(&manifest, &mods).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.19.0] - 2026-06-16 — la sync limpia copias duplicadas del mismo mod
+
+- **Tras sincronizar, las carpetas DUPLICADAS de un mod del set se mandan a la papelera** (reversible).
+  Si un amigo ya tenia un mod en una carpeta con OTRO nombre (p.ej. `SuperMod-v2/` en vez de la
+  canonica `SuperMod/`), o una copia vieja en `mods_disabled/`, la sync la limpia — antes quedaban DOS
+  copias del mismo mod cargando a la vez, lo que cambia el room-hash de multiplayer y dejaba al amigo
+  afuera del lobby. Solo limpia si la copia canonica `mods/<id>/` ya existe (nunca borra la unica
+  copia), nunca toca mods fuera del set (`managed_ids`), y avisa cuantas mando a la papelera. El
+  auto-update de un mod ya hacia esto al reinstalar (1.14.1); ahora la sync tambien.
+
 ## [1.18.0] - 2026-06-16 — ver QUE cambia un codigo antes de aplicarlo
 
 - **Preview del codigo compartido** (pestaña Perfiles): pegar un codigo y tocar **"Revisar codigo"**

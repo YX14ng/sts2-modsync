@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.18.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.19.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -120,7 +120,10 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
   `profile::apply`. GUI en la pestaña Perfiles; CLI `loadcode [<codigo>]`).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
-  delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
+  delta/fallback; `clean_duplicate_folders` manda a la papelera, tras instalar, las carpetas
+  duplicadas de un id del set —otra copia con otro nombre o en `mods_disabled/`— para no cargar dos
+  veces el mismo mod [room-hash]; solo si la canonica `mods/<id>/` existe, nunca fuera de
+  `managed_ids`) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
   resultado SIEMPRE se re-verifica por blake3, sino cae al full) · `signing` (minisign verify)
   · `transport` (GitHub Releases, `reqwest` blocking, **content-addressed por blake3** —fulls Y
   patches—; `resolve_latest_manifest` resuelve el ultimo release de un repo; el trait `ModSource`

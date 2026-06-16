@@ -716,13 +716,26 @@ impl App {
                     },
                     &cancel,
                 )?;
-                // No tragar errores: si quedaron huerfanos sin borrar, avisarlo en la pantalla final.
-                let note = (!report.orphans_failed.is_empty()).then(|| {
-                    format!(
-                        "Listo, pero {} huerfano(s) no se pudieron borrar (revisalos a mano).",
+                // Limpiar carpetas DUPLICADAS de los mods del set (otra copia con otro nombre, o en
+                // mods_disabled/) -> a la papelera. Evita dos copias del mismo mod cargando a la vez
+                // (room-hash distinto en multiplayer). Best-effort.
+                let dups = sync::clean_duplicate_folders(&manifest, &install);
+
+                // No tragar nada: avisar en la pantalla final lo que se limpio y lo que no se pudo.
+                let mut notes: Vec<String> = Vec::new();
+                if !dups.is_empty() {
+                    notes.push(format!(
+                        "Se mandaron {} carpeta(s) duplicada(s) a la papelera.",
+                        dups.len()
+                    ));
+                }
+                if !report.orphans_failed.is_empty() {
+                    notes.push(format!(
+                        "{} huerfano(s) no se pudieron borrar (revisalos a mano).",
                         report.orphans_failed.len()
-                    )
-                });
+                    ));
+                }
+                let note = (!notes.is_empty()).then(|| notes.join(" "));
                 Ok(note)
             })();
             let _ = match result {
