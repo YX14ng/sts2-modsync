@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.27.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.28.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -148,9 +148,11 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
 - **Front:** `main` (CLI con subcomandos) · `gui/` (eframe, feature `gui` que INCLUYE `p2p`):
   partido en submodulos — `gui/mod.rs` (chasis: struct `App` con TODOS los campos privados, `new`,
   tema, `run`, topbar/nav, dispatcher `ui()`, y los metodos transversales scan/accion/toast/auto-update)
-  · `widgets` (free fns de presentacion: `card`/`human_*`/toasts/onboarding) · `mods_tab` · `sync_tab`
-  (estado `SyncState` + workers de fetch/plan/apply + suscripciones) · `publish_tab` (+ seed P2P)
-  · `profiles_tab` · `github_login`. Cada tab aporta un `impl App` parcial; un submodulo HIJO ve los
+  · `widgets` (free fns de presentacion: `card`/`human_*`/toasts/onboarding) · `job` (`Job<T>`: el
+  worker de fondo tipado que TODOS los `*_job` usan — `spawn` para un resultado, `channel` para
+  streaming, `poll`/`next`/`clear`/`busy`; centraliza el sondeo `Empty`/`Disconnected` + el repaint)
+  · `mods_tab` · `sync_tab` (estado `SyncState` + workers de fetch/plan/apply + suscripciones) ·
+  `publish_tab` (+ seed P2P) · `profiles_tab` · `github_login`. Cada tab aporta un `impl App` parcial; un submodulo HIJO ve los
   campos privados de `App` (definido en `mod.rs`), asi NO hay que volver `pub` el estado. Lo que el
   padre nombra de un hijo (tipos en campos de `App`, free fns compartidas) va `pub(super)`. `lib.rs`
   reexporta. **Para tocar una pestaña, editas SU archivo, no un monolito.**

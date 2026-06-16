@@ -5,7 +5,6 @@ use super::App;
 use super::OK;
 use super::widgets::card;
 use eframe::egui;
-use std::sync::mpsc::{TryRecvError, channel};
 
 /// Eventos del worker de login de GitHub (PAT o device-flow).
 pub(super) enum GhEvent {
@@ -25,24 +24,18 @@ pub(super) enum GhRepoEvent {
 impl App {
     /// Valida UNA vez el token guardado en el llavero (whoami -> gh_user). Best-effort.
     pub(super) fn gh_check_stored(&mut self, ctx: &egui::Context) {
-        if self.gh_user_checked || self.gh_job.is_some() {
+        if self.gh_user_checked || self.gh_job.busy() {
             return;
         }
         self.gh_user_checked = true;
         let Some(token) = crate::github::load_token() else {
             return;
         };
-        let (tx, rx) = channel();
-        self.gh_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::github::Api::new(token).whoami() {
+        self.gh_job
+            .spawn(ctx, move || match crate::github::Api::new(token).whoami() {
                 Ok(login) => GhEvent::Connected(login),
                 Err(_) => GhEvent::Disconnected, // token guardado ya no sirve
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
-        });
+            });
     }
 
     /// Guarda el PAT pegado y lo valida (whoami). Si no valida, no se guarda.
@@ -52,11 +45,8 @@ impl App {
             return;
         }
         self.gh_pat.clear();
-        let (tx, rx) = channel();
-        self.gh_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::github::Api::new(token.clone()).whoami() {
+        self.gh_job.spawn(ctx, move || {
+            match crate::github::Api::new(token.clone()).whoami() {
                 Ok(login) => match crate::github::store_token(&token) {
                     Ok(()) => GhEvent::Connected(login),
                     Err(e) => {
@@ -64,17 +54,15 @@ impl App {
                     }
                 },
                 Err(e) => GhEvent::Failed(format!("token invalido o sin permiso: {e:#}")),
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
+            }
         });
     }
 
     /// Arranca el OAuth device-flow: pide el codigo, lo muestra (la UI abre el link) y poll-ea
-    /// hasta que el usuario autoriza.
+    /// hasta que el usuario autoriza. Manda DOS mensajes (DeviceCode, luego el final), por eso usa
+    /// `Job::channel` y spawnea a mano (no `spawn`, que es para un solo resultado).
     fn gh_connect_device(&mut self, ctx: &egui::Context) {
-        let (tx, rx) = channel();
-        self.gh_job = Some(rx);
+        let tx = self.gh_job.channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let dc = match crate::github::device_start() {
@@ -144,63 +132,55 @@ impl App {
     }
 
     pub(super) fn poll_gh_job(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.gh_job else {
+        let Some(ev) = self.gh_job.poll(ctx) else {
             return;
         };
-        match rx.try_recv() {
-            Ok(GhEvent::DeviceCode { user_code, uri }) => {
-                // Abrir el navegador automaticamente en la pagina de autorizacion (lo que promete el
-                // flujo "log in con el navegador"); igual queda el link visible para re-abrir a mano.
+        match ev {
+            // DeviceCode NO termina el job: el worker sigue (luego mandara Connected/Failed). Abrir el
+            // navegador automaticamente (lo que promete "log in con el navegador") y mostrar el codigo.
+            GhEvent::DeviceCode { user_code, uri } => {
                 ctx.open_url(egui::OpenUrl::new_tab(&uri));
                 self.gh_device = Some((user_code, uri));
-                ctx.request_repaint();
             }
-            Ok(GhEvent::Connected(login)) => {
+            GhEvent::Connected(login) => {
+                self.gh_job.clear();
                 self.gh_user = Some(login.clone());
                 self.gh_device = None;
-                self.gh_job = None;
                 self.show_toast(format!("conectado a GitHub como {login}"), false);
             }
-            Ok(GhEvent::Disconnected) => {
+            GhEvent::Disconnected => {
+                self.gh_job.clear();
                 self.gh_user = None;
                 self.gh_device = None;
-                self.gh_job = None;
             }
-            Ok(GhEvent::Failed(e)) => {
+            GhEvent::Failed(e) => {
+                self.gh_job.clear();
                 self.gh_device = None;
-                self.gh_job = None;
                 self.show_toast(e, true);
             }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.gh_job = None,
         }
     }
 
     /// Lista en un hilo los repos donde el usuario puede pushear (para elegir uno de publicacion).
     fn gh_load_repos(&mut self, ctx: &egui::Context) {
-        if self.gh_repo_job.is_some() {
+        if self.gh_repo_job.busy() {
             return;
         }
         let Some(token) = crate::github::load_token() else {
             self.show_toast("conecta GitHub primero", true);
             return;
         };
-        let (tx, rx) = channel();
-        self.gh_repo_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::github::Api::new(token).list_repos() {
+        self.gh_repo_job.spawn(ctx, move || {
+            match crate::github::Api::new(token).list_repos() {
                 Ok(repos) => GhRepoEvent::Listed(repos),
                 Err(e) => GhRepoEvent::Failed(format!("{e:#}")),
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
+            }
         });
     }
 
     /// Crea en un hilo un repo PUBLICO nuevo (`gh_new_repo`) y lo deja elegido como repo de publicacion.
     fn gh_create_repo(&mut self, ctx: &egui::Context) {
-        if self.gh_repo_job.is_some() {
+        if self.gh_repo_job.busy() {
             return;
         }
         let name = self.gh_new_repo.trim().to_string();
@@ -211,30 +191,22 @@ impl App {
             self.show_toast("conecta GitHub primero", true);
             return;
         };
-        let (tx, rx) = channel();
-        self.gh_repo_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::github::Api::new(token).create_repo(&name) {
+        self.gh_repo_job.spawn(ctx, move || {
+            match crate::github::Api::new(token).create_repo(&name) {
                 Ok(full) => GhRepoEvent::Created(full),
                 Err(e) => GhRepoEvent::Failed(format!("{e:#}")),
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
+            }
         });
     }
 
     pub(super) fn poll_gh_repo_job(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.gh_repo_job else {
+        let Some(ev) = self.gh_repo_job.poll(ctx) else {
             return;
         };
-        match rx.try_recv() {
-            Ok(GhRepoEvent::Listed(repos)) => {
-                self.gh_repos = repos;
-                self.gh_repo_job = None;
-            }
-            Ok(GhRepoEvent::Created(full)) => {
-                self.gh_repo_job = None;
+        self.gh_repo_job.clear();
+        match ev {
+            GhRepoEvent::Listed(repos) => self.gh_repos = repos,
+            GhRepoEvent::Created(full) => {
                 self.gh_new_repo.clear();
                 if !self.gh_repos.contains(&full) {
                     self.gh_repos.insert(0, full.clone());
@@ -242,12 +214,7 @@ impl App {
                 self.select_publish_repo(full.clone());
                 self.show_toast(format!("repo creado: {full}"), false);
             }
-            Ok(GhRepoEvent::Failed(e)) => {
-                self.gh_repo_job = None;
-                self.show_toast(e, true);
-            }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.gh_repo_job = None,
+            GhRepoEvent::Failed(e) => self.show_toast(e, true),
         }
     }
 
@@ -258,7 +225,7 @@ impl App {
         // NUEVO (sino quedaria la propuesta del repo anterior). No pisar lo que el usuario escribio.
         if repo != self.pub_repo && self.pub_version.trim().is_empty() {
             self.pub_version_autofilled = false;
-            self.pub_version_job = None;
+            self.pub_version_job.clear();
         }
         self.pub_repo = repo.clone();
         self.cfg.publish_repo = Some(repo);
@@ -271,7 +238,7 @@ impl App {
         if self.gh_user.is_none() && !crate::github::is_connected() {
             return;
         }
-        let busy = self.gh_repo_job.is_some();
+        let busy = self.gh_repo_job.busy();
         ui.horizontal(|ui| {
             ui.label("Mis repos:");
             let mut chosen: Option<String> = None;
@@ -351,7 +318,7 @@ impl App {
                 });
                 return;
             }
-            if self.gh_job.is_some() {
+            if self.gh_job.busy() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("conectando...");

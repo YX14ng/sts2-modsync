@@ -6,7 +6,6 @@ use super::{ACCENT, App, BAD, WARN};
 use crate::modsource::ModSource;
 use crate::{manager, modlist};
 use eframe::egui;
-use std::sync::mpsc::{TryRecvError, channel};
 
 /// Resultado del worker de Nexus (conectar la key, o validar la guardada al arrancar). `announce`
 /// distingue una conexion EXPLICITA del usuario (toast en exito/error) de la validacion silenciosa
@@ -119,7 +118,7 @@ impl App {
         // Chequear updates de TODOS los mods de una (varias llamadas a la red en un worker).
         let mut check_all = false;
         ui.horizontal(|ui| {
-            let checking = self.mod_update_all_job.is_some();
+            let checking = self.mod_update_all_job.busy();
             if ui
                 .add_enabled(
                     !checking,
@@ -155,7 +154,7 @@ impl App {
         }
         self.render_toast(ui);
 
-        if self.scan_job.is_some() || !self.mods_loaded {
+        if self.scan_job.busy() || !self.mods_loaded {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Escaneando mods...");
@@ -171,7 +170,7 @@ impl App {
             // Las que ya estan instaladas (deshabilitadas) se habilitan con un clic.
             let enableable = modlist::enableable_missing_deps(&self.mods);
             if !enableable.is_empty() {
-                let can = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+                let can = self.busy.is_empty() && !self.action_job.busy() && !self.game_running;
                 let label = format!(
                     "Habilitar {} dependencia(s) ya instalada(s)",
                     enableable.len()
@@ -203,7 +202,7 @@ impl App {
                 .map(|g| g.remove.len())
                 .sum();
             if n_dup > 0 {
-                let can = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+                let can = self.busy.is_empty() && !self.action_job.busy() && !self.game_running;
                 let label =
                     format!("Quitar {n_dup} duplicado(s) — deja la version mas nueva (papelera)");
                 if ui.add_enabled(can, egui::Button::new(label)).clicked() {
@@ -251,7 +250,7 @@ impl App {
                 (on, off + 1)
             }
         });
-        let can_act = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+        let can_act = self.busy.is_empty() && !self.action_job.busy() && !self.game_running;
         let filter = self.filter.to_ascii_lowercase();
 
         // Acciones masivas (util cuando hay muchos mods: troubleshooting, cambiar de contexto). Operan
@@ -490,7 +489,7 @@ impl App {
         if let Some(src) = &source {
             if src.supports_auto_download() {
                 ui.horizontal(|ui| {
-                    let checking = self.mod_update_job.is_some();
+                    let checking = self.mod_update_job.busy();
                     if ui
                         .add_enabled(!checking, egui::Button::new("Buscar actualizacion"))
                         .clicked()
@@ -531,7 +530,7 @@ impl App {
                 // Nexus: chequeo de version via API. Premium -> descarga DIRECTA; gratis -> nxm://.
                 if self.nexus_connected {
                     ui.horizontal(|ui| {
-                        let checking = self.mod_update_job.is_some();
+                        let checking = self.mod_update_job.busy();
                         if ui
                             .add_enabled(!checking, egui::Button::new("Buscar actualizacion"))
                             .clicked()
@@ -613,7 +612,7 @@ impl App {
                                 .password(true)
                                 .desired_width(280.0),
                         );
-                        let busy = self.nexus_job.is_some();
+                        let busy = self.nexus_job.busy();
                         if ui
                             .add_enabled(
                                 !busy && !self.nexus_key_input.trim().is_empty(),
@@ -821,10 +820,7 @@ impl App {
             .and_then(|m| m.manifest.version.clone());
         let installed_tag = self.cfg.mod_installed_tag.get(&id).cloned();
         let cctx = self.check_ctx();
-        let (tx, rx) = channel();
-        self.mod_update_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
+        self.mod_update_job.spawn(ctx, move || {
             let res = crate::modupdate::check(
                 &src,
                 &id,
@@ -833,8 +829,7 @@ impl App {
                 cctx,
             )
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send((id, res));
-            ctx.request_repaint();
+            (id, res)
         });
     }
 
@@ -843,16 +838,13 @@ impl App {
     /// chequear (rate-limit de GitHub sin login, sin conexion). Los de Nexus se saltean si no hay
     /// API key conectada (no se cuentan como fallo).
     fn check_all_updates(&mut self, ctx: &egui::Context) {
-        if self.mod_update_all_job.is_some() {
+        if self.mod_update_all_job.busy() {
             return;
         }
         let mods = self.mods.clone();
         let cfg = self.cfg.clone();
         let cctx = self.check_ctx();
-        let (tx, rx) = channel();
-        self.mod_update_all_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
+        self.mod_update_all_job.spawn(ctx, move || {
             let mut found = std::collections::HashMap::new();
             let mut failed = 0usize;
             for m in &mods {
@@ -870,36 +862,28 @@ impl App {
                     Err(_) => failed += 1,
                 }
             }
-            let _ = tx.send((found, failed));
-            ctx.request_repaint();
+            (found, failed)
         });
     }
 
     pub(super) fn poll_mod_update_all(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.mod_update_all_job else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok((found, failed)) => {
-                let n = found.len();
-                for (id, upd) in found {
-                    self.mod_updates.insert(id, upd);
-                }
-                self.mod_update_all_job = None;
-                let mut msg = if n == 0 {
-                    "todos los mods estan al dia".to_string()
-                } else {
-                    format!("{n} mod(s) con actualizacion (marcados con ● update)")
-                };
-                if failed > 0 {
-                    msg.push_str(&format!(
-                        " · {failed} no se pudieron chequear (¿rate-limit de GitHub? conecta GitHub para 5000/h)"
-                    ));
-                }
-                self.show_toast(msg, failed > 0 && n == 0);
+        if let Some((found, failed)) = self.mod_update_all_job.poll(ctx) {
+            self.mod_update_all_job.clear();
+            let n = found.len();
+            for (id, upd) in found {
+                self.mod_updates.insert(id, upd);
             }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.mod_update_all_job = None,
+            let mut msg = if n == 0 {
+                "todos los mods estan al dia".to_string()
+            } else {
+                format!("{n} mod(s) con actualizacion (marcados con ● update)")
+            };
+            if failed > 0 {
+                msg.push_str(&format!(
+                    " · {failed} no se pudieron chequear (¿rate-limit de GitHub? conecta GitHub para 5000/h)"
+                ));
+            }
+            self.show_toast(msg, failed > 0 && n == 0);
         }
     }
 
@@ -907,18 +891,15 @@ impl App {
     /// falla (blip de red), no molesta con un toast y deja la key guardada. Asi al abrir la app ya
     /// sabemos si la cuenta es Premium (habilita la descarga directa).
     pub(super) fn nexus_check_stored(&mut self, ctx: &egui::Context) {
-        if self.nexus_checked || self.nexus_job.is_some() {
+        if self.nexus_checked || self.nexus_job.busy() {
             return;
         }
         self.nexus_checked = true;
         if !crate::nexus::is_connected() {
             return;
         }
-        let (tx, rx) = channel();
-        self.nexus_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::nexus::validate() {
+        self.nexus_job
+            .spawn(ctx, || match crate::nexus::validate() {
                 Ok(u) => NexusEvent::Connected {
                     name: u.name,
                     premium: u.is_premium,
@@ -928,10 +909,7 @@ impl App {
                     msg: format!("{e:#}"),
                     announce: false,
                 },
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
-        });
+            });
     }
 
     /// Conecta la API Key de Nexus: la guarda en el llavero y la valida en un hilo (toast al terminar).
@@ -940,11 +918,8 @@ impl App {
         if key.is_empty() {
             return;
         }
-        let (tx, rx) = channel();
-        self.nexus_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ev = match crate::nexus::store_key(&key).and_then(|()| crate::nexus::validate()) {
+        self.nexus_job.spawn(ctx, move || {
+            match crate::nexus::store_key(&key).and_then(|()| crate::nexus::validate()) {
                 Ok(u) => NexusEvent::Connected {
                     name: u.name,
                     premium: u.is_premium,
@@ -958,9 +933,7 @@ impl App {
                         announce: true,
                     }
                 }
-            };
-            let _ = tx.send(ev);
-            ctx.request_repaint();
+            }
         });
     }
 
@@ -973,28 +946,27 @@ impl App {
         self.show_toast("desconectado de Nexus", false);
     }
 
-    pub(super) fn poll_nexus_job(&mut self) {
-        let Some(rx) = &self.nexus_job else {
+    pub(super) fn poll_nexus_job(&mut self, ctx: &egui::Context) {
+        let Some(ev) = self.nexus_job.poll(ctx) else {
             return;
         };
-        match rx.try_recv() {
-            Ok(NexusEvent::Connected {
+        self.nexus_job.clear();
+        match ev {
+            NexusEvent::Connected {
                 name,
                 premium,
                 announce,
-            }) => {
+            } => {
                 self.nexus_user = Some(name.clone());
                 self.nexus_premium = premium;
                 self.nexus_connected = true;
                 self.nexus_key_input.clear();
-                self.nexus_job = None;
                 if announce {
                     let tag = if premium { " (Premium)" } else { "" };
                     self.show_toast(format!("Nexus conectado como {name}{tag}"), false);
                 }
             }
-            Ok(NexusEvent::Failed { msg, announce }) => {
-                self.nexus_job = None;
+            NexusEvent::Failed { msg, announce } => {
                 if announce {
                     // Conexion explicita fallida: la key ya se borro en el worker.
                     self.nexus_user = None;
@@ -1003,31 +975,23 @@ impl App {
                 }
                 // Validacion de arranque fallida (announce=false): dejar el estado como esta.
             }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => self.nexus_job = None,
         }
     }
 
     pub(super) fn poll_mod_update(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.mod_update_job else {
+        let Some((id, res)) = self.mod_update_job.poll(ctx) else {
             return;
         };
-        match rx.try_recv() {
-            Ok((id, Ok(Some(upd)))) => {
+        self.mod_update_job.clear();
+        match res {
+            Ok(Some(upd)) => {
                 self.mod_updates.insert(id, upd);
-                self.mod_update_job = None;
             }
-            Ok((id, Ok(None))) => {
+            Ok(None) => {
                 self.mod_updates.remove(&id);
                 self.show_toast(format!("{id}: ya estas en la ultima version"), false);
-                self.mod_update_job = None;
             }
-            Ok((_, Err(e))) => {
-                self.show_toast(e, true);
-                self.mod_update_job = None;
-            }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.mod_update_job = None,
+            Err(e) => self.show_toast(e, true),
         }
     }
 

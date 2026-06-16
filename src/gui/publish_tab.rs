@@ -34,7 +34,7 @@ impl App {
     /// Auto-completa el campo Version (una vez): resuelve el ULTIMO release del repo y propone la
     /// siguiente, asi el modder no la tiene que tipear. No pisa lo que el usuario ya haya escrito.
     fn maybe_autofill_version(&mut self, ctx: &egui::Context) {
-        if self.pub_version_autofilled || self.pub_version_job.is_some() {
+        if self.pub_version_autofilled || self.pub_version_job.busy() {
             return;
         }
         if !self.pub_version.trim().is_empty() {
@@ -49,34 +49,22 @@ impl App {
         };
         let (owner, name) = (owner.to_string(), name.to_string());
         self.pub_version_autofilled = true;
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.pub_version_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let proposed = crate::transport::latest_release_tag(&owner, &name)
+        self.pub_version_job.spawn(ctx, move || {
+            crate::transport::latest_release_tag(&owner, &name)
                 .ok()
                 .flatten()
                 .map(|t| crate::publish::next_version(&t))
-                .unwrap_or_else(|| "1.0.0".to_string());
-            let _ = tx.send(proposed);
-            ctx.request_repaint();
+                .unwrap_or_else(|| "1.0.0".to_string())
         });
     }
 
-    fn poll_autoversion(&mut self) {
-        let Some(rx) = &self.pub_version_job else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(v) => {
-                // Solo si el usuario no escribio nada entretanto (no pisar lo suyo).
-                if self.pub_version.trim().is_empty() {
-                    self.pub_version = v;
-                }
-                self.pub_version_job = None;
+    fn poll_autoversion(&mut self, ctx: &egui::Context) {
+        if let Some(v) = self.pub_version_job.poll(ctx) {
+            self.pub_version_job.clear();
+            // Solo si el usuario no escribio nada entretanto (no pisar lo suyo).
+            if self.pub_version.trim().is_empty() {
+                self.pub_version = v;
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pub_version_job = None,
         }
     }
 
@@ -87,7 +75,7 @@ impl App {
         }
         self.gh_check_stored(ctx);
         self.maybe_autofill_version(ctx);
-        self.poll_autoversion();
+        self.poll_autoversion(ctx);
         self.ui_github_connect(ui, ctx);
         if !self.profiles_loaded {
             self.profiles = profile::list();
@@ -119,7 +107,7 @@ impl App {
                     .hint_text("se autocompleta")
                     .desired_width(160.0),
             );
-            if self.pub_version_job.is_some() {
+            if self.pub_version_job.busy() {
                 ui.spinner();
                 ui.label(egui::RichText::new("proponiendo la siguiente...").weak());
             }
@@ -179,7 +167,7 @@ impl App {
 
         ui.add_space(6.0);
         let can = self.busy.is_empty()
-            && self.action_job.is_none()
+            && !self.action_job.busy()
             && !self.pub_name.trim().is_empty()
             && crate::github::valid_tag(&self.pub_version).is_some()
             && crate::github::normalize_repo(&self.pub_repo).is_some()

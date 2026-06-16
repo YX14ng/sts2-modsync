@@ -3,6 +3,7 @@
 //! Tambien el chequeo manual de "version nueva" de los sets suscritos.
 
 use super::App;
+use super::job::Job;
 use super::widgets::{card, human_eta, human_mb, human_speed};
 use super::{ACCENT, BAD, OK, WARN};
 use crate::manifest::SetManifest;
@@ -10,7 +11,6 @@ use crate::{config, detect, sync, transport, update};
 use eframe::egui;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 /// Resultado del worker que baja el set-manifest + su `.minisig` opcional.
 /// Resultado del worker que baja el manifest: (texto del manifest, `.minisig` opcional, URL REAL
@@ -63,11 +63,11 @@ pub(super) struct SyncState {
     /// Estado de la verificacion de firma del set cargado (se muestra afirmativo en la UI).
     pub(super) sig_status: Option<crate::signing::SigStatus>,
     pub(super) plan: Option<sync::Plan>,
-    pub(super) plan_job: Option<Receiver<Result<sync::Plan, String>>>,
+    pub(super) plan_job: Job<Result<sync::Plan, String>>,
     pub(super) consent: bool,
     /// Descarga del set-manifest (+ su `.minisig` opcional) por URL (worker).
-    pub(super) fetch_job: Option<Receiver<FetchResult>>,
-    pub(super) apply_job: Option<Receiver<SyncProgress>>,
+    pub(super) fetch_job: Job<FetchResult>,
+    pub(super) apply_job: Job<SyncProgress>, // STREAMING (varios SyncProgress hasta Done/Failed)
     /// Flag de cancelacion del apply en curso (lo lee el worker; lo setea el boton Cancelar).
     pub(super) apply_cancel: Option<Arc<AtomicBool>>,
     pub(super) prog: ProgressState,
@@ -76,7 +76,7 @@ pub(super) struct SyncState {
 impl SyncState {
     /// True si hay un job de sync en curso (plan/fetch/apply). Lo consulta `App::any_job`.
     pub(super) fn busy(&self) -> bool {
-        self.plan_job.is_some() || self.fetch_job.is_some() || self.apply_job.is_some()
+        self.plan_job.busy() || self.fetch_job.busy() || self.apply_job.busy()
     }
 }
 
@@ -86,10 +86,7 @@ impl App {
     pub(super) fn check_set_updates(&mut self, ctx: &egui::Context) {
         let sets = self.cfg.subscribed_sets.clone();
         let known = self.cfg.set_versions.clone();
-        let (tx, rx) = channel();
-        self.set_check_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
+        self.set_check_job.spawn(ctx, move || {
             let mut updates: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             // Sets que NO se pudieron chequear (rate-limit anonimo de GitHub 60/h, sin conexion,
@@ -129,30 +126,22 @@ impl App {
                     None => failed += 1,
                 }
             }
-            let _ = tx.send((updates, failed));
-            ctx.request_repaint();
+            (updates, failed)
         });
     }
 
     pub(super) fn poll_set_check(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.set_check_job else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok((updates, failed)) => {
-                self.set_updates = updates;
-                self.set_check_job = None;
-                if failed > 0 {
-                    self.show_toast(
-                        format!(
-                            "No se pudo chequear {failed} set(s): rate-limit de GitHub (60/h sin login) o sin conexion"
-                        ),
-                        true,
-                    );
-                }
+        if let Some((updates, failed)) = self.set_check_job.poll(ctx) {
+            self.set_check_job.clear();
+            self.set_updates = updates;
+            if failed > 0 {
+                self.show_toast(
+                    format!(
+                        "No se pudo chequear {failed} set(s): rate-limit de GitHub (60/h sin login) o sin conexion"
+                    ),
+                    true,
+                );
             }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.set_check_job = None,
         }
     }
 
@@ -204,7 +193,7 @@ impl App {
                     do_open_file = true;
                 }
             });
-            if self.sync.fetch_job.is_some() {
+            if self.sync.fetch_job.busy() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Descargando manifest...");
@@ -218,14 +207,14 @@ impl App {
                     );
                     if ui
                         .add_enabled(
-                            self.set_check_job.is_none(),
+                            !self.set_check_job.busy(),
                             egui::Button::new("Buscar actualizaciones"),
                         )
                         .clicked()
                     {
                         check_updates = true;
                     }
-                    if self.set_check_job.is_some() {
+                    if self.set_check_job.busy() {
                         ui.spinner();
                     }
                 });
@@ -358,7 +347,7 @@ impl App {
         }
         ui.separator();
 
-        if self.sync.plan_job.is_some() {
+        if self.sync.plan_job.busy() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Calculando plan (hash)...");
@@ -419,7 +408,7 @@ impl App {
         };
         ui.add(egui::ProgressBar::new(frac).show_percentage());
 
-        let running = self.sync.apply_job.is_some();
+        let running = self.sync.apply_job.busy();
         // Detalle (solo mientras corre): archivo actual + bajado/total + velocidad + ETA.
         if running && !finished {
             if !self.sync.prog.file.is_empty() {
@@ -536,14 +525,11 @@ impl App {
         // registraria la version del set viejo contra la clave equivocada al instalar.
         self.sync.manifest = None;
         self.sync.plan = None;
-        self.sync.plan_job = None;
+        self.sync.plan_job.clear();
         self.sync.consent = false;
         self.sync.sig_status = None;
-        let (tx, rx) = channel();
-        self.sync.fetch_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let res = (|| -> std::result::Result<_, String> {
+        self.sync.fetch_job.spawn(ctx, move || {
+            (|| -> std::result::Result<_, String> {
                 // Una suscripcion por repo se resuelve al manifest del ultimo release; una URL va tal cual.
                 let url = match config::as_repo_sub(&sub_key) {
                     Some(owner_repo) => {
@@ -559,28 +545,15 @@ impl App {
                 // La firma es opcional (modo dev no la trae): best-effort.
                 let sig = transport::get_text(&format!("{url}.minisig")).ok();
                 Ok((manifest, sig, url))
-            })();
-            let _ = tx.send(res);
-            ctx.request_repaint();
+            })()
         });
     }
 
     pub(super) fn poll_fetch_job(&mut self, ctx: &egui::Context) {
-        let res = match &self.sync.fetch_job {
-            Some(rx) => match rx.try_recv() {
-                Ok(r) => r,
-                Err(TryRecvError::Empty) => {
-                    ctx.request_repaint();
-                    return;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    self.sync.fetch_job = None;
-                    return;
-                }
-            },
-            None => return,
+        let Some(res) = self.sync.fetch_job.poll(ctx) else {
+            return;
         };
-        self.sync.fetch_job = None;
+        self.sync.fetch_job.clear();
         match res {
             Ok((text, sig, resolved_url)) => {
                 self.load_from_text(&text, resolved_url, sig, ctx);
@@ -610,7 +583,7 @@ impl App {
     ) {
         self.sync.load_err = None;
         self.sync.plan = None;
-        self.sync.plan_job = None;
+        self.sync.plan_job.clear();
         self.sync.consent = false;
         self.sync.manifest = None;
         self.sync.sig_status = None;
@@ -644,22 +617,18 @@ impl App {
         else {
             return;
         };
-        let (tx, rx) = channel();
-        self.sync.plan_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let res = sync::plan(&manifest, &install.mods_dir).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(res);
-            ctx.request_repaint();
+        self.sync.plan_job.spawn(ctx, move || {
+            sync::plan(&manifest, &install.mods_dir).map_err(|e| format!("{e:#}"))
         });
     }
 
     pub(super) fn poll_plan_job(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.sync.plan_job else {
+        let Some(res) = self.sync.plan_job.poll(ctx) else {
             return;
         };
-        match rx.try_recv() {
-            Ok(Ok(plan)) => {
+        self.sync.plan_job.clear();
+        match res {
+            Ok(plan) => {
                 // Cold-start del indicador "version nueva": si te suscribiste y ya estas AL DIA
                 // (plan noop: nada para bajar ni huerfanos) sin baseline previa, registrala. Asi un
                 // amigo que recibio los archivos por otra via (Drive) y despues se suscribe ve el
@@ -676,14 +645,8 @@ impl App {
                     let _ = config::save(&self.cfg);
                 }
                 self.sync.plan = Some(plan);
-                self.sync.plan_job = None;
             }
-            Ok(Err(e)) => {
-                self.sync.load_err = Some(e);
-                self.sync.plan_job = None;
-            }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.sync.plan_job = None,
+            Err(e) => self.sync.load_err = Some(e),
         }
     }
 
@@ -692,8 +655,7 @@ impl App {
         else {
             return;
         };
-        let (tx, rx) = channel();
-        self.sync.apply_job = Some(rx);
+        let tx = self.sync.apply_job.channel(); // STREAMING: el worker manda varios SyncProgress
         let cancel = Arc::new(AtomicBool::new(false));
         self.sync.apply_cancel = Some(cancel.clone());
         self.sync.prog = ProgressState {
@@ -783,19 +745,20 @@ impl App {
     }
 
     pub(super) fn poll_apply_job(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.sync.apply_job else {
+        if !self.sync.apply_job.busy() {
             return;
-        };
-        let mut closed = false;
-        loop {
-            match rx.try_recv() {
-                Ok(SyncProgress::Status(s)) => self.sync.prog.status = s,
-                Ok(SyncProgress::File(f)) => self.sync.prog.file = f,
-                Ok(SyncProgress::Bytes { done, total }) => {
+        }
+        // Drenar todos los mensajes disponibles este frame (sin repaint por mensaje: el heartbeat de
+        // abajo, throttled, mantiene vivo el loop). `next` limpia el slot solo si el worker murio.
+        while let Some(msg) = self.sync.apply_job.next() {
+            match msg {
+                SyncProgress::Status(s) => self.sync.prog.status = s,
+                SyncProgress::File(f) => self.sync.prog.file = f,
+                SyncProgress::Bytes { done, total } => {
                     self.sync.prog.done = done;
                     self.sync.prog.total = total;
                 }
-                Ok(SyncProgress::Done(note)) => {
+                SyncProgress::Done(note) => {
                     self.sync.prog.finished = true;
                     self.sync.prog.done = self.sync.prog.total; // barra al 100%
                     self.sync.prog.file.clear();
@@ -817,7 +780,7 @@ impl App {
                         let _ = config::save(&self.cfg);
                     }
                 }
-                Ok(SyncProgress::Failed(e)) => {
+                SyncProgress::Failed(e) => {
                     self.sync.prog.finished = true;
                     self.sync.prog.file.clear();
                     self.sync.apply_cancel = None;
@@ -828,11 +791,6 @@ impl App {
                     } else {
                         self.sync.prog.error = Some(e);
                     }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    closed = true;
-                    break;
                 }
             }
         }
@@ -855,10 +813,9 @@ impl App {
                 None => self.sync.prog.last_sample = Some((self.sync.prog.done, now)),
             }
         }
-        if closed {
-            self.sync.apply_job = None;
-        } else {
-            // Heartbeat throttled (~7/seg): mantiene vivo el loop y la velocidad/ETA al dia.
+        // Mientras el job siga vivo (`next` lo limpia solo si el worker murio), heartbeat throttled
+        // (~7/seg): mantiene el loop y la velocidad/ETA al dia, y recoge el cierre del worker.
+        if self.sync.apply_job.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
     }

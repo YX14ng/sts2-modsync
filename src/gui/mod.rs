@@ -12,6 +12,7 @@
 //! el chasis (tema, ventana, topbar/nav, struct App y sus metodos transversales).
 
 mod github_login;
+mod job;
 mod mods_tab;
 mod profiles_tab;
 mod publish_tab;
@@ -24,13 +25,23 @@ use crate::profile::Profile;
 use crate::{config, launch, update};
 use eframe::egui;
 use github_login::{GhEvent, GhRepoEvent};
+use job::Job;
 use mods_tab::NexusEvent;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use sync_tab::SyncState;
 use widgets::{Toast, nav_item, toast_hint};
+
+/// Resultado del worker de chequeo de update de UN mod: (id, version nueva o error).
+pub(super) type ModUpdateResult = (String, Result<Option<crate::modupdate::ModUpdate>, String>);
+/// Resultado del worker de "chequear TODOS": (updates hallados por id, cuantos no se pudieron).
+pub(super) type ModUpdatesFound = (
+    std::collections::HashMap<String, crate::modupdate::ModUpdate>,
+    usize,
+);
+/// Resultado del worker de chequeo de sets suscritos: (clave de sub -> version nueva, no chequeados).
+pub(super) type SetUpdatesFound = (std::collections::HashMap<String, String>, usize);
 
 const WARN: egui::Color32 = egui::Color32::from_rgb(0xC8, 0x5A, 0x00);
 const OK: egui::Color32 = egui::Color32::from_rgb(0x2E, 0xA0, 0x43);
@@ -157,7 +168,7 @@ struct App {
     // Pestaña Mods
     mods: Vec<InstalledMod>,
     mods_loaded: bool,
-    scan_job: Option<Receiver<Result<Vec<InstalledMod>, String>>>,
+    scan_job: Job<Result<Vec<InstalledMod>, String>>,
     filter: String,
     sort_enabled_first: bool, // orden de la lista: habilitados arriba (sino, solo alfabetico)
     selected: Option<String>,
@@ -167,29 +178,22 @@ struct App {
     // `mod_update_job` = worker del chequeo (id, resultado).
     mod_source_input: String,
     mod_updates: std::collections::HashMap<String, crate::modupdate::ModUpdate>,
-    #[allow(clippy::type_complexity)]
-    mod_update_job: Option<Receiver<(String, Result<Option<crate::modupdate::ModUpdate>, String>)>>,
+    mod_update_job: Job<ModUpdateResult>,
     // Chequeo de updates de TODOS los mods de una (worker): devuelve (updates hallados, cuantos no
     // se pudieron chequear). Pesa varias llamadas a la red, por eso va en su propio worker.
-    #[allow(clippy::type_complexity)]
-    mod_update_all_job: Option<
-        Receiver<(
-            std::collections::HashMap<String, crate::modupdate::ModUpdate>,
-            usize,
-        )>,
-    >,
+    mod_update_all_job: Job<ModUpdatesFound>,
     // Nexus: conexion con la API Key (para chequear versiones de mods de Nexus). `nexus_user` = el
     // usuario conectado (None = sin chequear/sin conectar); `nexus_key_input` = el campo para pegar
     // la key; `nexus_job` = worker de validar+guardar (Ok(nombre) | Err).
     nexus_user: Option<String>,
     nexus_key_input: String,
-    nexus_job: Option<Receiver<NexusEvent>>,
+    nexus_job: Job<NexusEvent>,
     nexus_connected: bool, // cache de `nexus::is_connected()` (evita leer el llavero cada frame)
     nexus_premium: bool,   // cuenta Premium: habilita la descarga DIRECTA (sin handler nxm://)
     nexus_checked: bool,   // ya validamos la key guardada (whoami -> nombre + premium), una vez
 
     // Accion en curso (enable/disable/install/uninstall/aplicar perfil): una a la vez.
-    action_job: Option<Receiver<Result<String, String>>>,
+    action_job: Job<Result<String, String>>,
     busy: String,
     toast: Option<Toast>,
 
@@ -218,7 +222,7 @@ struct App {
     pub_version: String,
     // Auto-completar la version: worker que resuelve el ultimo release del repo y propone la
     // siguiente; `autofilled` evita re-pedirlo y no pisar lo que el usuario tipee.
-    pub_version_job: Option<Receiver<String>>,
+    pub_version_job: Job<String>,
     pub_version_autofilled: bool,
     pub_repo: String, // "owner/repo" (recordado en config para no recrear repos)
     pub_profile: Option<String>, // None = mods habilitados actuales
@@ -231,22 +235,22 @@ struct App {
     gh_user: Option<String>, // login conectado (None = no conectado / sin chequear)
     gh_user_checked: bool,   // ya validamos el token guardado
     gh_pat: String,          // input del token pegado
-    gh_job: Option<Receiver<GhEvent>>, // worker de login (PAT o device-flow)
+    gh_job: Job<GhEvent>,    // worker de login (PAT o device-flow; device-flow manda 2 mensajes)
     gh_device: Option<(String, String)>, // (user_code, verification_uri) durante el device-flow
     // Elegir/crear el repo de publicacion sin tipearlo: lista de repos donde podes pushear + el
     // worker (listar o crear) + el nombre del repo nuevo a crear.
     gh_repos: Vec<String>,
-    gh_repo_job: Option<Receiver<GhRepoEvent>>,
+    gh_repo_job: Job<GhRepoEvent>,
     gh_new_repo: String,
 
     // Auto-update
     update_checked: bool,
-    update_check_job: Option<Receiver<Option<update::Release>>>,
+    update_check_job: Job<Option<update::Release>>,
     update_avail: Option<update::Release>,
 
     // Sets suscritos: chequeo manual de "version nueva" (worker que baja cada manifest).
     // El worker devuelve (updates clave->version_nueva, cantidad de sets que NO se pudieron chequear).
-    set_check_job: Option<Receiver<(std::collections::HashMap<String, String>, usize)>>,
+    set_check_job: Job<SetUpdatesFound>,
     set_updates: std::collections::HashMap<String, String>, // clave de sub -> version remota mas nueva
 
     dark_mode: bool,
@@ -266,12 +270,12 @@ impl App {
             game_running: false,
             mods: Vec::new(),
             mods_loaded: false,
-            scan_job: None,
+            scan_job: Job::default(),
             filter: String::new(),
             sort_enabled_first: false,
             selected: None,
             confirm_uninstall: None,
-            action_job: None,
+            action_job: Job::default(),
             busy: String::new(),
             toast: None,
             sync: SyncState::default(),
@@ -285,7 +289,7 @@ impl App {
             pending_compare: None,
             pub_name,
             pub_version: String::new(),
-            pub_version_job: None,
+            pub_version_job: Job::default(),
             pub_version_autofilled: false,
             pub_repo,
             pub_profile: None,
@@ -295,23 +299,23 @@ impl App {
             gh_user: None,
             gh_user_checked: false,
             gh_pat: String::new(),
-            gh_job: None,
+            gh_job: Job::default(),
             gh_device: None,
             gh_repos: Vec::new(),
-            gh_repo_job: None,
+            gh_repo_job: Job::default(),
             gh_new_repo: String::new(),
             update_checked: false,
-            update_check_job: None,
+            update_check_job: Job::default(),
             update_avail: None,
-            set_check_job: None,
+            set_check_job: Job::default(),
             set_updates: std::collections::HashMap::new(),
             mod_source_input: String::new(),
             mod_updates: std::collections::HashMap::new(),
-            mod_update_job: None,
-            mod_update_all_job: None,
+            mod_update_job: Job::default(),
+            mod_update_all_job: Job::default(),
             nexus_user: None,
             nexus_key_input: String::new(),
-            nexus_job: None,
+            nexus_job: Job::default(),
             nexus_connected: crate::nexus::is_connected(),
             nexus_premium: false,
             nexus_checked: false,
@@ -324,27 +328,13 @@ impl App {
     // --- auto-update --------------------------------------------------------
 
     fn kick_update_check(&mut self, ctx: &egui::Context) {
-        let (tx, rx) = channel();
-        self.update_check_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let res = update::check(); // best-effort: Option<Release>
-            let _ = tx.send(res);
-            ctx.request_repaint();
-        });
+        self.update_check_job.spawn(ctx, update::check); // best-effort: Option<Release>
     }
 
-    fn poll_update_check(&mut self) {
-        let Some(rx) = &self.update_check_job else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(res) => {
-                self.update_avail = res;
-                self.update_check_job = None;
-            }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => self.update_check_job = None,
+    fn poll_update_check(&mut self, ctx: &egui::Context) {
+        if let Some(res) = self.update_check_job.poll(ctx) {
+            self.update_check_job.clear();
+            self.update_avail = res;
         }
     }
 
@@ -386,32 +376,25 @@ impl App {
         let Some(install) = self.install.clone() else {
             return;
         };
-        let (tx, rx) = channel();
-        self.scan_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let res = modlist::scan(&install).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(res);
-            ctx.request_repaint();
+        self.scan_job.spawn(ctx, move || {
+            modlist::scan(&install).map_err(|e| format!("{e:#}"))
         });
     }
 
     fn poll_scan(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.scan_job else { return };
-        match rx.try_recv() {
-            Ok(Ok(mods)) => {
-                self.mods = mods;
-                self.mods_loaded = true;
-                self.scan_job = None;
-                self.game_running = detect::is_game_running();
+        if let Some(res) = self.scan_job.poll(ctx) {
+            self.scan_job.clear();
+            match res {
+                Ok(mods) => {
+                    self.mods = mods;
+                    self.mods_loaded = true;
+                    self.game_running = detect::is_game_running();
+                }
+                Err(e) => {
+                    self.show_toast(e, true);
+                    self.mods_loaded = true;
+                }
             }
-            Ok(Err(e)) => {
-                self.show_toast(e, true);
-                self.mods_loaded = true;
-                self.scan_job = None;
-            }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => self.scan_job = None,
         }
     }
 
@@ -461,53 +444,39 @@ impl App {
         busy: String,
         f: impl FnOnce() -> anyhow::Result<String> + Send + 'static,
     ) {
-        if self.action_job.is_some() {
+        if self.action_job.busy() {
             return;
         }
         self.busy = busy;
         self.toast = None;
-        let (tx, rx) = channel();
-        self.action_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let res = f().map_err(|e| format!("{e:#}"));
-            let _ = tx.send(res);
-            ctx.request_repaint();
-        });
+        self.action_job
+            .spawn(ctx, move || f().map_err(|e| format!("{e:#}")));
     }
 
     fn poll_action(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.action_job else { return };
-        match rx.try_recv() {
-            Ok(res) => {
-                self.action_job = None;
-                self.busy.clear();
-                match res {
-                    Ok(m) => self.show_toast(m, false),
-                    Err(e) => self.show_toast(e, true),
-                }
-                self.mods_loaded = false; // refrescar lista
-                // Una accion (p.ej. mod-update) pudo escribir la config desde el worker
-                // (mod_installed_tag): recargarla. La config en disco siempre == self.cfg salvo eso.
-                self.cfg = config::load();
+        if let Some(res) = self.action_job.poll(ctx) {
+            self.action_job.clear();
+            self.busy.clear();
+            match res {
+                Ok(m) => self.show_toast(m, false),
+                Err(e) => self.show_toast(e, true),
             }
-            Err(TryRecvError::Empty) => ctx.request_repaint(),
-            Err(TryRecvError::Disconnected) => {
-                self.action_job = None;
-                self.busy.clear();
-                self.mods_loaded = false;
-                self.show_toast("la operacion no se completo (worker terminado)", true);
-            }
+            self.mods_loaded = false; // refrescar lista
+            // Una accion (p.ej. mod-update) pudo escribir la config desde el worker
+            // (mod_installed_tag): recargarla. La config en disco siempre == self.cfg salvo eso.
+            self.cfg = config::load();
+        } else if !self.busy.is_empty() && !self.action_job.busy() {
+            // El worker murio sin mandar resultado (panic): no dejar la UI "ocupada" para siempre.
+            self.busy.clear();
+            self.mods_loaded = false;
+            self.show_toast("la operacion no se completo (worker terminado)", true);
         }
     }
 
     /// True si hay CUALQUIER trabajo de fondo en curso (scan, accion, plan, fetch, apply).
     /// Usado para no disparar acciones destructivas (update, cargar set) en paralelo.
     fn any_job(&self) -> bool {
-        !self.busy.is_empty()
-            || self.action_job.is_some()
-            || self.scan_job.is_some()
-            || self.sync.busy()
+        !self.busy.is_empty() || self.action_job.busy() || self.scan_job.busy() || self.sync.busy()
     }
 }
 
@@ -522,17 +491,17 @@ impl eframe::App for App {
         self.poll_set_check(&ctx);
         self.poll_mod_update(&ctx);
         self.poll_mod_update_all(&ctx);
-        self.poll_nexus_job();
+        self.poll_nexus_job(&ctx);
         self.poll_gh_job(&ctx);
         self.poll_gh_repo_job(&ctx);
-        if self.install.is_some() && !self.mods_loaded && self.scan_job.is_none() {
+        if self.install.is_some() && !self.mods_loaded && !self.scan_job.busy() {
             self.kick_scan(&ctx);
         }
         if !self.update_checked {
             self.update_checked = true;
             self.kick_update_check(&ctx);
         }
-        self.poll_update_check();
+        self.poll_update_check(&ctx);
 
         egui::Panel::top("topbar")
             .frame(

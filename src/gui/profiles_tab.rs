@@ -145,7 +145,7 @@ impl App {
         }
         ui.separator();
 
-        let can_act = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+        let can_act = self.busy.is_empty() && !self.action_job.busy() && !self.game_running;
         let mut apply: Option<Profile> = None;
         let mut delete: Option<String> = None;
         let mut share: Option<Profile> = None;

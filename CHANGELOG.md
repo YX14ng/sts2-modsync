@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.28.0] - 2026-06-16 — refactor interno: abstraccion `Job<T>` para los workers (sin cambios visibles)
+
+Item estructural del analisis. Sin cambios de comportamiento para el usuario; gateado + review de 3
+verificadores (equivalencia / repaint / edge-cases).
+
+- Los ~13 workers de fondo del GUI (cada uno un `Option<Receiver<T>>` + un `poll_*` con los MISMOS
+  brazos `Empty`/`Disconnected` repetidos a mano) ahora comparten una abstraccion `Job<T>` (spawn /
+  poll / next / clear / busy). Saca ~150 lineas de boilerplate y los dos `#[allow(type_complexity)]`.
+- **Fix de 2 bugs latentes:** `poll_nexus_job` y `poll_update_check` se olvidaban el `request_repaint`
+  en `Empty`, asi que esos chequeos solo avanzaban si OTRA cosa repintaba la UI. Ahora `Job::poll`
+  siempre repinta mientras el job sigue vivo. El streaming (descarga de sync, device-flow) usa una
+  variante sin repaint + su heartbeat throttled (no repinta a 60fps).
+
 ## [1.27.0] - 2026-06-16 — ver QUE cambia al sincronizar + "Copiar diagnostico"
 
 - **Al sincronizar, ahora ves QUE cambia a nivel de MOD** (no solo una pila de bytes): *"Cambios del
