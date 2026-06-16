@@ -101,6 +101,10 @@ fn main() -> Result<()> {
             println!("lanzando Slay the Spire 2...");
         }
         "publish" => cmd_publish(&install, &args)?,
+        "doctor" => {
+            let mods = modlist::scan(&install)?;
+            print!("{}", sts2_modsync::doctor::report(&install, &mods, &cfg));
+        }
         "dedupe" => cmd_dedupe(&install)?,
         "loadcode" => cmd_loadcode(&install, &args)?,
         "mod-source" => cmd_mod_source(&args)?,
@@ -116,7 +120,7 @@ fn main() -> Result<()> {
         }
         other => {
             bail!(
-                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|dedupe|loadcode|seed|help)"
+                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|dedupe|loadcode|doctor|seed|help)"
             )
         }
     }
@@ -438,6 +442,20 @@ fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
         .and_then(|m| m.manifest.version.as_deref());
     for w in manifest.compatibility_warnings(local_bl, install.version.as_deref()) {
         println!("  [!] {w}");
+    }
+    // "Que cambia" a nivel de mod (no solo bytes).
+    let diff = modlist::diff_against_set(&local_mods, &manifest);
+    println!(
+        "  cambios          : {} nuevos, {} actualizados, {} ya al dia",
+        diff.new.len(),
+        diff.updated.len(),
+        diff.up_to_date
+    );
+    for (id, old, new) in &diff.updated {
+        println!("    {id}: v{old} -> v{new}");
+    }
+    if !diff.new.is_empty() {
+        println!("    nuevos: {}", diff.new.join(", "));
     }
     let plan = sync::plan(&manifest, &install.mods_dir)?;
     print_plan(&plan);
@@ -1162,6 +1180,9 @@ fn print_help() {
     );
     println!(
         "  loadcode [<codigo>]   sin arg: imprime el codigo de la lista activa; con codigo: lo aplica"
+    );
+    println!(
+        "  doctor                imprime un diagnostico (version, ModListSorter, huella, mods) para soporte"
     );
     println!(
         "  sync <set.json|url|owner/repo>  dry-run del plan; con owner/repo sigue el ultimo release"

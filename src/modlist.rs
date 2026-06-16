@@ -333,6 +333,53 @@ pub fn current_fingerprint(mods: &[InstalledMod]) -> String {
     )
 }
 
+/// Diff a nivel de MOD (no de archivo) entre lo que trae un set y lo instalado: que mods son NUEVOS,
+/// cuales se ACTUALIZAN (version distinta) y cuantos ya estan al dia. Para que el amigo vea "que
+/// cambia" en terminos de mods/versiones antes de sincronizar, en vez de solo una pila de bytes.
+#[derive(Debug, Default)]
+pub struct SetDiff {
+    /// Ids del set que NO tenes instalados (los vas a instalar).
+    pub new: Vec<String>,
+    /// (id, tu_version, version_del_set) de mods que tenes pero con OTRA version (se actualizan).
+    pub updated: Vec<(String, String, String)>,
+    /// Cuantos mods del set ya tenes en la MISMA version (sin cambios).
+    pub up_to_date: usize,
+}
+
+impl SetDiff {
+    /// `true` si nada cambia a nivel de mod (ni nuevos ni actualizados).
+    pub fn is_noop(&self) -> bool {
+        self.new.is_empty() && self.updated.is_empty()
+    }
+}
+
+/// Compara los mods del `manifest` (id + version) contra los instalados localmente. Solo lectura.
+pub fn diff_against_set(
+    local: &[InstalledMod],
+    manifest: &crate::manifest::SetManifest,
+) -> SetDiff {
+    let installed: BTreeSet<&str> = local.iter().map(|m| m.id()).collect();
+    let mut diff = SetDiff::default();
+    for m in &manifest.mods {
+        if !installed.contains(m.id.as_str()) {
+            diff.new.push(m.id.clone());
+            continue;
+        }
+        let local_v = local
+            .iter()
+            .find(|x| x.id() == m.id)
+            .and_then(|x| x.manifest.version.as_deref())
+            .unwrap_or("?");
+        if local_v == m.version {
+            diff.up_to_date += 1;
+        } else {
+            diff.updated
+                .push((m.id.clone(), local_v.to_string(), m.version.clone()));
+        }
+    }
+    diff
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +404,53 @@ mod tests {
             enabled,
             size_bytes: 0,
         }
+    }
+
+    fn imv(id: &str, version: &str) -> InstalledMod {
+        let mut m = InstalledMod::fake(id, true);
+        m.manifest.version = Some(version.to_string());
+        m
+    }
+
+    fn set_with(mods: &[(&str, &str)]) -> crate::manifest::SetManifest {
+        crate::manifest::SetManifest {
+            schema: 1,
+            set_name: "t".into(),
+            set_version: "1".into(),
+            published_at: "n".into(),
+            signing_key_id: None,
+            base_url: "https://x/".into(),
+            magnet: None,
+            baselib_version: None,
+            game_version: None,
+            mods: mods
+                .iter()
+                .map(|(id, v)| crate::manifest::ModEntry {
+                    id: id.to_string(),
+                    version: v.to_string(),
+                    dependencies: vec![],
+                    files: vec![],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn diff_against_set_clasifica_nuevos_actualizados_y_al_dia() {
+        let local = vec![imv("BaseLib", "1.0"), imv("Char", "2.0")];
+        let set = set_with(&[("BaseLib", "1.0"), ("Char", "3.0"), ("Nuevo", "1.0")]);
+        let d = diff_against_set(&local, &set);
+        assert_eq!(d.new, vec!["Nuevo".to_string()]);
+        assert_eq!(
+            d.updated,
+            vec![("Char".to_string(), "2.0".to_string(), "3.0".to_string())]
+        );
+        assert_eq!(d.up_to_date, 1); // BaseLib al dia
+        assert!(!d.is_noop());
+        // El set identico a lo instalado -> noop.
+        assert!(
+            diff_against_set(&local, &set_with(&[("BaseLib", "1.0"), ("Char", "2.0")])).is_noop()
+        );
     }
 
     #[test]

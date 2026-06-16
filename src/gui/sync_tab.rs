@@ -329,6 +329,32 @@ impl App {
             for w in m.compatibility_warnings(local_bl, local_game) {
                 ui.colored_label(BAD, format!("⚠ {w}"));
             }
+            // "Que cambia" a nivel de MOD (no solo bytes): el amigo ve nuevos / actualizados / al dia
+            // antes de bajar nada, en vez de una pila de archivos sin contexto.
+            let diff = crate::modlist::diff_against_set(&self.mods, m);
+            if !diff.is_noop() || diff.up_to_date > 0 {
+                let mut parts = Vec::new();
+                if !diff.new.is_empty() {
+                    parts.push(format!("nuevos {}", diff.new.len()));
+                }
+                if !diff.updated.is_empty() {
+                    parts.push(format!("actualizados {}", diff.updated.len()));
+                }
+                if diff.up_to_date > 0 {
+                    parts.push(format!("ya al dia {}", diff.up_to_date));
+                }
+                ui.label(
+                    egui::RichText::new(format!("Cambios del set: {}", parts.join(" · "))).strong(),
+                );
+                if !diff.new.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("Nuevos: {}", diff.new.join(", "))).weak(),
+                    );
+                }
+                for (id, old, new) in &diff.updated {
+                    ui.label(egui::RichText::new(format!("{id}: v{old} → v{new}")).weak());
+                }
+            }
         }
         ui.separator();
 

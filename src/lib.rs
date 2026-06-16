@@ -8,6 +8,7 @@
 pub mod config;
 pub mod delta;
 pub mod detect;
+pub mod doctor;
 pub mod github;
 pub mod hashing;
 pub mod launch;

@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.27.0] - 2026-06-16 — ver QUE cambia al sincronizar + "Copiar diagnostico"
+
+- **Al sincronizar, ahora ves QUE cambia a nivel de MOD** (no solo una pila de bytes): *"Cambios del
+  set: nuevos 3 · actualizados 2 · ya al dia 10"*, con la lista de los nuevos y cada actualizado
+  `Mod: vVieja → vNueva`. Antes el amigo actualizaba a ciegas. (CLI: el `sync` lo imprime igual.)
+- **Boton "Copiar diagnostico"** (pestaña Mods) y subcomando **`doctor`** (CLI): copian/imprimen un
+  bloque con tu estado para pegar cuando "no podemos jugar juntos" — version, install, ModListSorter
+  si/no, **huella de orden de carga**, conflictos, mods habilitados + versiones, sets suscriptos. Solo
+  lectura; no incluye secretos (los tokens/keys viven en el llavero, no en este reporte).
+
 ## [1.26.0] - 2026-06-16 — avisar si el set NO es compatible con tu BaseLib / version del juego
 
 Otra causa invisible de "no podemos jugar juntos" / crashes, ahora detectada (item del analisis).

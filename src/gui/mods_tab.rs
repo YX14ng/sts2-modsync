@@ -36,6 +36,7 @@ impl App {
         let mut pick_zip = false;
         let mut open_mods_folder = false;
         let mut open_data_folder = false;
+        let mut copy_diag = false;
         ui.horizontal(|ui| {
             ui.label("Buscar:");
             ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(180.0));
@@ -65,6 +66,16 @@ impl App {
                 .clicked()
             {
                 open_data_folder = true;
+            }
+            if ui
+                .button("Copiar diagnostico")
+                .on_hover_text(
+                    "Copia un bloque con tu estado (version, ModListSorter, huella de orden de carga, \
+                     mods+versiones) para pegar cuando \"no podemos jugar juntos\".",
+                )
+                .clicked()
+            {
+                copy_diag = true;
             }
             // Canal GLOBAL de actualizacion de mods (estable vs beta/pre-releases).
             ui.separator();
@@ -98,6 +109,11 @@ impl App {
                 }
                 None => self.show_toast("no se pudo resolver la carpeta de datos", true),
             }
+        }
+        if copy_diag && let Some(install) = &self.install {
+            let report = crate::doctor::report(install, &self.mods, &self.cfg);
+            ctx.copy_text(report);
+            self.show_toast("diagnostico copiado al portapapeles", false);
         }
 
         // Chequear updates de TODOS los mods de una (varias llamadas a la red en un worker).
