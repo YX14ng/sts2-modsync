@@ -242,16 +242,18 @@ fn cmd_loadcode(install: &detect::Install, args: &[String]) -> Result<()> {
     match args.get(1) {
         None => {
             let mods = modlist::scan(install)?;
-            let ids: Vec<String> = mods
+            let enabled: Vec<(String, Option<String>)> = mods
                 .iter()
                 .filter(|m| m.enabled)
-                .map(|m| m.id().to_string())
+                .map(|m| (m.id().to_string(), m.manifest.version.clone()))
                 .collect();
-            let code = loadcode::encode("", &ids);
+            let code = loadcode::encode_versioned("", &enabled);
             println!(
-                "Codigo de la lista actual ({} mods activos) — pasaselo a un amigo (lo aplica con \
-                 `loadcode <codigo>` o pegandolo en la pestaña Perfiles):\n\n{code}\n",
-                ids.len()
+                "Codigo de la lista actual ({} mods activos · huella de orden {}) — pasaselo a un \
+                 amigo (lo aplica con `loadcode <codigo>` o pegandolo en la pestaña Perfiles; misma \
+                 huella = mismo orden de carga = mismo lobby):\n\n{code}\n",
+                enabled.len(),
+                modlist::current_fingerprint(&mods)
             );
         }
         Some(code) => {

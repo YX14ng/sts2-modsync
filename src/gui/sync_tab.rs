@@ -424,6 +424,13 @@ impl App {
             );
         } else if finished {
             ui.colored_label(OK, "Instalacion completa.");
+            ui.label(
+                egui::RichText::new(
+                    "Para confirmar que entras al MISMO lobby que tus amigos: en la pestaña Mods mira \
+                     la \"Huella de orden de carga\" y comparala con ellos (misma huella = mismo lobby).",
+                )
+                .weak(),
+            );
         }
         ui.add_space(10.0);
 

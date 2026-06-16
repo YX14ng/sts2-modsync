@@ -198,6 +198,19 @@ impl App {
                 }
             }
         }
+        // Huella del orden de carga: un valor CONCRETO para comparar con un amigo (misma huella =
+        // mismo orden = mismo lobby). Mas util que la lista cruda para confirmar el match.
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Huella de orden de carga:").strong());
+            let fp = modlist::current_fingerprint(&self.mods);
+            ui.add(egui::Label::new(
+                egui::RichText::new(&fp).monospace().color(ACCENT),
+            ))
+            .on_hover_text(
+                "Compartila con tu amigo: si los dos ven la MISMA huella, tienen el mismo orden \
+                     de carga y entran al mismo lobby. (Comparar codigos: pestaña Perfiles.)",
+            );
+        });
         // En acento (azul) para que se note: es una linea de info larga que conviene distinguir.
         ui.colored_label(
             ACCENT,

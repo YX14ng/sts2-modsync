@@ -3,6 +3,22 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.24.0] - 2026-06-16 — VERIFICAR el match de multiplayer (huella + comparar con un amigo)
+
+El producto existe para que vos y tus amigos entren al MISMO lobby (el juego saca un "room-hash"
+del ORDEN DE CARGA de los mods). Hasta ahora la app solo ACONSEJABA; esta version lo deja VERIFICAR.
+
+- **Huella de orden de carga** (8 caracteres) en la pestaña Mods y en la CLI (`loadcode`/`list`): un
+  valor concreto para comparar de un vistazo. **Misma huella = mismo orden de carga = mismo lobby.**
+  (`modlist::load_order_fingerprint`; es deterministica e independiente de la maquina.)
+- **"Comparar con el código de un amigo"** (pestaña Perfiles): pegas su código y "Comparar" te dice si
+  COINCIDEN (huella) y, si no, QUE difiere — **te faltan** (no instalados → bajalos/sync), **tenés que
+  activar**, **tenés de más** (activados), y **versiones distintas**. Solo lectura (anda con el juego
+  abierto). Convierte "no me deja entrar al lobby" en una respuesta precisa y accionable.
+- El **código compartido ahora lleva las versiones** de los mods (para el diff de versión). Es ADITIVO
+  y compatible: las apps viejas leen los códigos nuevos igual, y los códigos viejos se siguen leyendo.
+- Tras una sync, la pantalla final te recuerda comparar la huella con tus amigos.
+
 ## [1.23.0] - 2026-06-16 — pulido de UX (el amigo que recibe, el modder que publica)
 
 - **Pestaña Sync: UN solo campo que detecta solo.** Pegas un LINK (`https://...`) o un `usuario/repo`

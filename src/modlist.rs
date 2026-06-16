@@ -310,6 +310,29 @@ pub fn load_order_enforced(mods: &[InstalledMod]) -> bool {
         .any(|m| m.enabled && m.id() == LOAD_ORDER_ENFORCER_ID)
 }
 
+/// HUELLA corta (8 hex) del ORDEN DE CARGA canonico de un conjunto de ids habilitados — un valor
+/// CONCRETO que dos amigos pueden comparar de un vistazo: misma huella = mismo orden de carga, que
+/// es la condicion (necesaria) para entrar al MISMO lobby de multiplayer. Es deterministica e
+/// independiente de la maquina (canonical_order normaliza: BaseLib + A-Z). Es un PROXY del room-hash
+/// real de BaseLib (que se calcula del orden de carga): si las huellas DIFIEREN, seguro NO coinciden.
+/// La huella es sobre el MULTISET (canonical_order no deduplica): un id duplicado hace divergir la
+/// huella a proposito — solo puede dar un falso "no coinciden" (direccion segura), nunca lo contrario.
+pub fn load_order_fingerprint(enabled_ids: impl IntoIterator<Item = String>) -> String {
+    let order = canonical_order(enabled_ids);
+    let mut hex = crate::hashing::blake3_bytes(order.join("\n").as_bytes());
+    hex.truncate(8);
+    hex
+}
+
+/// Huella del orden de carga de los mods HABILITADOS ahora (atajo de `load_order_fingerprint`).
+pub fn current_fingerprint(mods: &[InstalledMod]) -> String {
+    load_order_fingerprint(
+        mods.iter()
+            .filter(|m| m.enabled)
+            .map(|m| m.id().to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +357,26 @@ mod tests {
             enabled,
             size_bytes: 0,
         }
+    }
+
+    #[test]
+    fn fingerprint_determinista_y_sensible_al_conjunto() {
+        // Mismo conjunto, distinto orden de entrada -> MISMA huella (canonical_order normaliza).
+        let a = load_order_fingerprint(["BaseLib", "Zeta", "alpha"].map(String::from));
+        let b = load_order_fingerprint(["alpha", "BaseLib", "Zeta"].map(String::from));
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 8);
+        // Quitar un mod cambia la huella (sensible al conjunto).
+        let c = load_order_fingerprint(["BaseLib", "Zeta"].map(String::from));
+        assert_ne!(a, c);
+        // El conjunto vacio tambien da una huella estable (sin panic).
+        assert_eq!(load_order_fingerprint(Vec::<String>::new()).len(), 8);
+        // `current_fingerprint` solo cuenta los HABILITADOS.
+        let mods = vec![im("BaseLib", true, &[]), im("Off", false, &[])];
+        assert_eq!(
+            current_fingerprint(&mods),
+            load_order_fingerprint(["BaseLib".to_string()])
+        );
     }
 
     #[test]

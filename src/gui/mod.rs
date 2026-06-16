@@ -210,6 +210,8 @@ struct App {
     // Nombre de un perfil pendiente de confirmar SOBRESCRITURA (guardar sobre uno que ya existe, que
     // es irreversible: reescribe el archivo). None = no hay confirmacion pendiente.
     confirm_save_profile: Option<String>,
+    // Resultado de "comparar con el codigo de un amigo" (huella + que difiere). None = sin comparacion.
+    pending_compare: Option<crate::loadcode::Comparison>,
 
     // Pestaña Publicar
     pub_name: String,
@@ -280,6 +282,7 @@ impl App {
             import_code: String::new(),
             pending_loadcode: None,
             confirm_save_profile: None,
+            pending_compare: None,
             pub_name,
             pub_version: String::new(),
             pub_version_job: None,

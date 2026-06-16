@@ -20,6 +20,72 @@ impl App {
         }
     }
 
+    /// Panel del resultado de "Comparar con el codigo de un amigo": veredicto de huella + que difiere.
+    fn render_compare(&mut self, ui: &mut egui::Ui) {
+        let Some(c) = &self.pending_compare else {
+            return;
+        };
+        let mut close = false;
+        ui.add_space(4.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(egui::RichText::new("¿Entras al mismo lobby?").strong());
+            if c.matches {
+                ui.colored_label(
+                    super::OK,
+                    format!(
+                        "✓ Coinciden (huella {}). Mismo orden de carga = mismo lobby.",
+                        c.my_fingerprint
+                    ),
+                );
+            } else {
+                ui.colored_label(
+                    super::WARN,
+                    format!(
+                        "✗ No coinciden — tu huella {} vs {} del codigo.",
+                        c.my_fingerprint, c.their_fingerprint
+                    ),
+                );
+            }
+            if !c.missing.is_empty() {
+                ui.colored_label(
+                    super::BAD,
+                    format!("Te faltan (bajalos / sync): {}", c.missing.join(", ")),
+                );
+            }
+            if !c.disabled.is_empty() {
+                ui.colored_label(super::WARN, format!("Tenes que activar: {}", c.disabled.join(", ")));
+            }
+            if !c.extra.is_empty() {
+                ui.colored_label(
+                    super::WARN,
+                    format!("Tenes de mas (activados): {}", c.extra.join(", ")),
+                );
+            }
+            if !c.version_diff.is_empty() {
+                let txt: Vec<String> = c
+                    .version_diff
+                    .iter()
+                    .map(|(id, mine, theirs)| format!("{id} (vos v{mine}, amigo v{theirs})"))
+                    .collect();
+                ui.colored_label(super::WARN, format!("Versiones distintas: {}", txt.join(", ")));
+            }
+            if !c.matches && c.missing.is_empty() {
+                ui.label(
+                    egui::RichText::new(
+                        "Para igualar: \"Revisar codigo\" -> Confirmar (activa/desactiva lo que haga falta).",
+                    )
+                    .weak(),
+                );
+            }
+            if ui.button("Cerrar").clicked() {
+                close = true;
+            }
+        });
+        if close {
+            self.pending_compare = None;
+        }
+    }
+
     pub(super) fn ui_profiles(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.install.is_none() {
             ui.label("Detecta el juego para usar perfiles.");
@@ -118,6 +184,7 @@ impl App {
         let mut gen_code = false;
         let mut copy_code = false;
         let mut apply_code = false;
+        let mut compare_code = false;
         ui.horizontal(|ui| {
             if ui.button("Generar codigo de la lista actual").clicked() {
                 gen_code = true;
@@ -153,7 +220,30 @@ impl App {
             {
                 apply_code = true;
             }
+            // "Comparar": ¿entro al mismo lobby que mi amigo con ESTE codigo? Muestra que difiere
+            // (falta/activar/de mas/version) y si la huella de orden de carga coincide. Solo lectura.
+            if ui
+                .add_enabled(can, egui::Button::new("Comparar"))
+                .on_hover_text(
+                    "¿Vas a entrar al mismo lobby? Muestra que difiere respecto del codigo.",
+                )
+                .clicked()
+            {
+                compare_code = true;
+            }
         });
+        if compare_code {
+            match crate::loadcode::decode_full(&self.import_code) {
+                Ok(decoded) => {
+                    self.pending_compare = Some(crate::loadcode::compare(&self.mods, &decoded));
+                }
+                Err(e) => {
+                    self.pending_compare = None;
+                    self.show_toast(format!("codigo invalido: {e:#}"), true);
+                }
+            }
+        }
+        self.render_compare(ui);
 
         // Paso 1: "Revisar codigo" decodifica y calcula el IMPACTO (sin mover nada). Paso 2:
         // "Confirmar" recien aplica. Asi el que pega un codigo de un amigo ve que va a pasar.
@@ -253,16 +343,18 @@ impl App {
 
         // Generar/compartir el codigo (de la lista actual o de un perfil) -> al portapapeles.
         if gen_code {
-            let ids: Vec<String> = self
+            // De la lista ACTUAL incluimos la version de cada mod (para que el que compara vea
+            // diferencias de version). Un perfil guardado no las tiene, asi que ese sigue sin versiones.
+            let enabled: Vec<(String, Option<String>)> = self
                 .mods
                 .iter()
                 .filter(|m| m.enabled)
-                .map(|m| m.id().to_string())
+                .map(|m| (m.id().to_string(), m.manifest.version.clone()))
                 .collect();
-            self.share_code = crate::loadcode::encode("", &ids);
+            self.share_code = crate::loadcode::encode_versioned("", &enabled);
             copy_code = true;
             self.show_toast(
-                format!("codigo copiado ({} mods activos)", ids.len()),
+                format!("codigo copiado ({} mods activos)", enabled.len()),
                 false,
             );
         }

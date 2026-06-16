@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.23.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.24.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -116,7 +116,11 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
   · `nxm` (handler del protocolo `nxm://`: parse + registro en HKCU, solo Windows) · `loadcode`
   (codigo compartible de la lista de activados: `STS2L1.`+base64url(deflate(JSON)); `encode`/`decode`
   —decode UNTRUSTED: filtra ids no-simples + capa la descompresion anti zip-bomb—; aplica reusando
-  `profile::apply`. GUI en la pestaña Perfiles; CLI `loadcode [<codigo>]`).
+  `profile::apply`. Desde 1.24 el codigo lleva las VERSIONES (`ver`, campo ADITIVO, sigue en `v:1` =
+  compatible con apps viejas) y `compare()` diagnostica el match contra el estado local —que falta/
+  activar/sobra/version + veredicto de huella—. GUI en la pestaña Perfiles (Revisar/Comparar); CLI
+  `loadcode [<codigo>]`) · `modlist::load_order_fingerprint` (huella de 8 hex del orden de carga
+  canonico: dos amigos con la MISMA huella entran al mismo lobby; proxy del room-hash, no lo reemplaza).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
   delta/fallback; `clean_duplicate_folders` manda a la papelera, tras instalar, las carpetas
