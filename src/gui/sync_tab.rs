@@ -287,6 +287,10 @@ impl App {
         }
         if let Some(s) = del_saved {
             self.cfg.subscribed_sets.retain(|x| *x != s);
+            // Limpiar tambien el baseline de version (persistido) y el flag en memoria de esa
+            // suscripcion: si no, re-suscribirse despues resucita un "version nueva" viejo.
+            self.cfg.set_versions.remove(&s);
+            self.set_updates.remove(&s);
             let _ = config::save(&self.cfg);
         }
 

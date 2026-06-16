@@ -270,9 +270,19 @@ pub fn download_capped(url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
     }
     let mut f =
         std::fs::File::create(dest).with_context(|| format!("creando {}", dest.display()))?;
-    let n = std::io::copy(&mut resp.take(max_bytes + 1), &mut f)
-        .with_context(|| format!("escribiendo {}", dest.display()))?;
+    // Auto-limpieza: si el cuerpo falla a mitad o supera el cap, NO dejar un `dest` a medias
+    // (los llamadores ya lo borran, pero que la funcion sea self-cleaning evita un futuro leak).
+    let n = match std::io::copy(&mut resp.take(max_bytes + 1), &mut f) {
+        Ok(n) => n,
+        Err(e) => {
+            drop(f);
+            let _ = std::fs::remove_file(dest);
+            return Err(e).with_context(|| format!("escribiendo {}", dest.display()));
+        }
+    };
     if n > max_bytes {
+        drop(f);
+        let _ = std::fs::remove_file(dest);
         bail!("el archivo supera {} MB: abortado", max_bytes / 1_048_576);
     }
     Ok(())

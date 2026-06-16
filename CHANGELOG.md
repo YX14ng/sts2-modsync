@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.21.0] - 2026-06-16 — fixes de robustez de la sync
+
+- **Fix (Windows): la sync ya no manda a la papelera un archivo del set que solo difiere en
+  MAYUSCULAS.** El FS de Windows es case-insensitive: si tu copia local era `Mod/BaseLib.pck` pero el
+  manifest lo declara `Mod/baselib.pck`, el barrido de huerfanos lo veia como "sobrante" y lo
+  trasheaba (rompiendo el mod, aunque era recuperable). Ahora la comparacion es case-insensitive en
+  Windows (`sync::orphan_key`).
+- **Fix: al DESUSCRIBirte de un set tambien se limpia su baseline de version.** Antes quedaba colgado
+  en `config.set_versions`/memoria y, al re-suscribirte, resucitaba un "version nueva" viejo.
+- **Robustez: `transport::download_capped` se auto-limpia** — si la descarga se corta a la mitad o
+  supera el tope de tamaño, borra el archivo parcial en vez de dejarlo (los llamadores ya lo hacian;
+  ahora la funcion es self-cleaning para que un futuro llamador no filtre un `.part`).
+
 ## [1.20.0] - 2026-06-16 — confirmar antes de pisar un mod por `nxm://` + versiones estable/beta
 
 - **El flujo `nxm://` (boton "Mod Manager Download" de Nexus) ahora CONFIRMA antes de reemplazar** un

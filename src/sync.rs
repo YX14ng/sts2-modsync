@@ -92,11 +92,14 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
     // 1) Que bajar vs que ya esta (hash por archivo = capa delta gruesa). El cache evita
     // re-hashear los `.pck` que no cambiaron (compara size+mtime); se persiste en %APPDATA%.
     let mut cache = hashing::HashCache::load();
-    let mut expected: BTreeSet<PathBuf> = BTreeSet::new();
+    // Claves (normalizadas) de los archivos del manifest, para detectar huerfanos. NO se guarda el
+    // PathBuf crudo: en Windows el FS es case-insensitive, asi un `Mod/BaseLib.pck` en disco que el
+    // manifest declara como `Mod/baselib.pck` matchea igual y NO se manda a la papelera (ver `orphan_key`).
+    let mut expected: BTreeSet<String> = BTreeSet::new();
     for m in &manifest.mods {
         for f in &m.files {
             let local = mods_dir.join(rel_to_native(&f.path));
-            expected.insert(local.clone());
+            expected.insert(orphan_key(&local));
             if cache.matches(&local, &f.blake3) {
                 plan.up_to_date.push(f.path.clone());
             } else {
@@ -121,7 +124,8 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
         for entry in WalkDir::new(&dir).into_iter().filter_map(Result::ok) {
             let p = entry.path();
             // Los `.part` son descargas en curso/abortadas, NO huerfanos (se barren aparte).
-            if entry.file_type().is_file() && !is_part_file(p) && !expected.contains(p) {
+            if entry.file_type().is_file() && !is_part_file(p) && !expected.contains(&orphan_key(p))
+            {
                 plan.orphans.push(p.to_path_buf());
             }
         }
@@ -134,6 +138,16 @@ pub fn plan(manifest: &SetManifest, mods_dir: &Path) -> Result<Plan> {
 /// "a/b/c" -> PathBuf con separadores nativos.
 fn rel_to_native(p: &str) -> PathBuf {
     p.split(['/', '\\']).collect()
+}
+
+/// Clave para comparar una ruta al detectar huerfanos. En Windows el filesystem es
+/// case-INSENSITIVE: si el manifest declara `Mod/baselib.pck` pero en disco esta como
+/// `Mod/BaseLib.pck`, comparar exacto haria que el archivo (que ES el querido) no matchee y se
+/// mande a la papelera, rompiendo el mod. Por eso ahi normalizamos a minusculas; en el resto de
+/// plataformas (case-sensitive) se deja igual. Ambos lados de la comparacion usan esta misma clave.
+fn orphan_key(p: &Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    if cfg!(windows) { s.to_lowercase() } else { s }
 }
 
 /// Elige un patch para `f` si el archivo LOCAL viejo existe y su BLAKE3 matchea algun
@@ -1125,6 +1139,31 @@ mod tests {
         assert!(
             !orphans.iter().any(|o| o.ends_with(".part")),
             "el .part NO debe ser huerfano: {orphans:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plan_no_manda_a_la_papelera_un_archivo_que_solo_difiere_en_mayusculas() {
+        // En Windows (FS case-insensitive) el archivo en disco `Mod/BaseLib.pck` ES el que el
+        // manifest pide como `Mod/baselib.pck`: NO debe quedar como huerfano (antes lo trasheaba).
+        let base = std::env::temp_dir().join("sts2_modsync_plan_casing");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Mod")).unwrap();
+        let content = content_for("Mod/baselib.pck");
+        std::fs::write(base.join("Mod").join("BaseLib.pck"), &content).unwrap();
+        let manifest = manifest_one("Mod", "Mod/baselib.pck");
+
+        let plan = plan(&manifest, &base).unwrap();
+        let orphans: Vec<String> = plan
+            .orphans
+            .iter()
+            .map(|p| p.display().to_string().to_lowercase())
+            .collect();
+        assert!(
+            !orphans.iter().any(|o| o.ends_with("baselib.pck")),
+            "el archivo que solo difiere en mayusculas NO debe ser huerfano: {orphans:?}"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
