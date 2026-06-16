@@ -80,6 +80,19 @@ impl InstalledMod {
     }
 }
 
+#[cfg(test)]
+impl InstalledMod {
+    /// Constructor de prueba: un mod con solo `id` + estado `enabled`, sin tocar disco.
+    pub fn fake(id: &str, enabled: bool) -> Self {
+        InstalledMod {
+            manifest: serde_json::from_str(&format!(r#"{{"id":"{id}"}}"#)).unwrap(),
+            dir: PathBuf::from(id),
+            enabled,
+            size_bytes: 0,
+        }
+    }
+}
+
 /// `<root>/mods_disabled` (hermano de `mods/`).
 pub fn disabled_dir(install: &Install) -> PathBuf {
     install

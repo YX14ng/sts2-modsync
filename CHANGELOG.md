@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.18.0] - 2026-06-16 — ver QUE cambia un codigo antes de aplicarlo
+
+- **Preview del codigo compartido** (pestaña Perfiles): pegar un codigo y tocar **"Revisar codigo"**
+  ya no aplica de una — muestra el IMPACTO ("activa N, desactiva M, ya estan K · faltan J no
+  instalados", y lista cuales no tenes) y recien **"Confirmar"** lo aplica. Asi el que recibe un
+  codigo de un amigo ve que mods se van a activar/desactivar antes de tocar nada. Revisar es
+  solo-lectura (anda con el juego abierto); Confirmar exige el juego cerrado.
+- Refactor interno: `profile::apply` ahora se calcula con `profile::preview_from` (puro, sin tocar
+  disco) y despues ejecuta — mismo resultado, pero el preview reusa exactamente esa logica.
+
 ## [1.17.0] - 2026-06-15 — buscar actualizaciones de TODOS los mods de una
 
 - **"Buscar actualizaciones de todos los mods"** (pestaña Mods): un boton revisa el upstream de cada

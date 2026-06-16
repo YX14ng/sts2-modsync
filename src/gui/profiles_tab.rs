@@ -104,14 +104,106 @@ impl App {
                     .hint_text("STS2L1...")
                     .desired_width(300.0),
             );
-            let can = can_act && !self.import_code.trim().is_empty();
+            // Revisar es solo-lectura (calcula el impacto): se puede aun con el juego abierto.
+            // Recien "Confirmar" exige el juego cerrado (`can_act`).
+            let can = !self.import_code.trim().is_empty();
             if ui
-                .add_enabled(can, egui::Button::new("Aplicar codigo"))
+                .add_enabled(can, egui::Button::new("Revisar codigo"))
                 .clicked()
             {
                 apply_code = true;
             }
         });
+
+        // Paso 1: "Revisar codigo" decodifica y calcula el IMPACTO (sin mover nada). Paso 2:
+        // "Confirmar" recien aplica. Asi el que pega un codigo de un amigo ve que va a pasar.
+        if apply_code {
+            match crate::loadcode::decode(&self.import_code) {
+                Ok((name, ids)) => {
+                    let prof = Profile {
+                        name: if name.trim().is_empty() {
+                            "codigo".into()
+                        } else {
+                            name
+                        },
+                        enabled_ids: ids,
+                    };
+                    let report = profile::preview_from(&self.mods, &prof);
+                    self.pending_loadcode = Some((prof, report));
+                }
+                Err(e) => {
+                    self.pending_loadcode = None;
+                    self.show_toast(format!("codigo invalido: {e:#}"), true);
+                }
+            }
+        }
+        let mut confirm_code = false;
+        let mut cancel_code = false;
+        if let Some((prof, report)) = &self.pending_loadcode {
+            ui.add_space(4.0);
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("Codigo \"{}\"", prof.name)).strong());
+                // "ya estan": ids del codigo (DEDUPLICADOS) que ya estan habilitados ahora. Se
+                // calcula directo —no por resta— para no desfasar si el codigo trae ids repetidos.
+                let want: std::collections::BTreeSet<&str> =
+                    prof.enabled_ids.iter().map(String::as_str).collect();
+                let ya = want
+                    .iter()
+                    .filter(|id| self.mods.iter().any(|m| m.id() == **id && m.enabled))
+                    .count();
+                ui.label(format!(
+                    "Activa {}, desactiva {}, ya estan {} · faltan {} (no instalados).",
+                    report.enabled.len(),
+                    report.disabled.len(),
+                    ya,
+                    report.not_installed.len(),
+                ));
+                if !report.not_installed.is_empty() {
+                    ui.colored_label(
+                        super::WARN,
+                        format!("No tenes: {}", report.not_installed.join(", ")),
+                    );
+                }
+                if report.is_noop() && report.not_installed.is_empty() {
+                    ui.colored_label(super::OK, "Tu lista ya coincide — no hay nada que cambiar.");
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_act, egui::Button::new("Confirmar"))
+                        .clicked()
+                    {
+                        confirm_code = true;
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        cancel_code = true;
+                    }
+                });
+            });
+        }
+        if cancel_code {
+            self.pending_loadcode = None;
+        }
+        if confirm_code && let Some((prof, _)) = self.pending_loadcode.take() {
+            let install = self.install.clone().unwrap();
+            self.import_code.clear();
+            self.run_action(ctx, "aplicando la lista del codigo...".into(), move || {
+                let r = profile::apply(&install, &prof)?;
+                let mut msg = format!(
+                    "lista aplicada: +{} activados, -{} desactivados",
+                    r.enabled.len(),
+                    r.disabled.len()
+                );
+                if !r.not_installed.is_empty() {
+                    msg.push_str(&format!(
+                        " · faltan {} (no instalados): {}",
+                        r.not_installed.len(),
+                        r.not_installed.join(", ")
+                    ));
+                }
+                Ok(msg)
+            });
+        }
+
         if self.game_running {
             ui.colored_label(
                 super::WARN,
@@ -141,39 +233,6 @@ impl App {
         }
         if copy_code && !self.share_code.is_empty() {
             ctx.copy_text(self.share_code.clone());
-        }
-        if apply_code {
-            match crate::loadcode::decode(&self.import_code) {
-                Ok((name, ids)) => {
-                    let install = self.install.clone().unwrap();
-                    let prof = Profile {
-                        name: if name.trim().is_empty() {
-                            "codigo".into()
-                        } else {
-                            name
-                        },
-                        enabled_ids: ids,
-                    };
-                    self.import_code.clear();
-                    self.run_action(ctx, "aplicando la lista del codigo...".into(), move || {
-                        let r = profile::apply(&install, &prof)?;
-                        let mut msg = format!(
-                            "lista aplicada: +{} activados, -{} desactivados",
-                            r.enabled.len(),
-                            r.disabled.len()
-                        );
-                        if !r.not_installed.is_empty() {
-                            msg.push_str(&format!(
-                                " · faltan {} (no instalados): {}",
-                                r.not_installed.len(),
-                                r.not_installed.join(", ")
-                            ));
-                        }
-                        Ok(msg)
-                    });
-                }
-                Err(e) => self.show_toast(format!("codigo invalido: {e:#}"), true),
-            }
         }
 
         if let Some(p) = apply {

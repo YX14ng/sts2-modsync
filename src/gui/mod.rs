@@ -204,6 +204,9 @@ struct App {
     // copiar); `import_code` = el que el usuario pega para aplicar.
     share_code: String,
     import_code: String,
+    // Preview de un codigo pegado ANTES de aplicarlo: (perfil a aplicar, impacto calculado). Se
+    // muestra "activara N, desactivara M, faltan K" + Confirmar/Cancelar. None = no hay nada pendiente.
+    pending_loadcode: Option<(Profile, crate::profile::ApplyReport)>,
 
     // Pestaña Publicar
     pub_name: String,
@@ -272,6 +275,7 @@ impl App {
             new_profile: String::new(),
             share_code: String::new(),
             import_code: String::new(),
+            pending_loadcode: None,
             pub_name,
             pub_version: String::new(),
             pub_version_job: None,

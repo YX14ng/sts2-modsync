@@ -86,26 +86,31 @@ pub fn delete(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resultado de aplicar un perfil.
-#[derive(Debug, Default)]
+/// Resultado de aplicar un perfil (o el preview de lo que aplicaria, sin mutar nada).
+#[derive(Debug, Default, Clone)]
 pub struct ApplyReport {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
     pub not_installed: Vec<String>,
 }
 
-/// Aplica un perfil: deshabilita los mods habilitados que no esten en el perfil y habilita
-/// los del perfil que esten deshabilitados. Los ids del perfil que no esten instalados se
-/// reportan en `not_installed`. Exige juego cerrado (lo verifica `manager`).
-pub fn apply(install: &Install, profile: &Profile) -> Result<ApplyReport> {
+impl ApplyReport {
+    /// El preview no cambia nada (no hay que habilitar/deshabilitar nada).
+    pub fn is_noop(&self) -> bool {
+        self.enabled.is_empty() && self.disabled.is_empty()
+    }
+}
+
+/// Calcula (SIN mutar nada) que pasaria al aplicar `profile` sobre una lista de mods YA
+/// escaneada: que se habilitaria, que se deshabilitaria y que ids del perfil no estan
+/// instalados. Puro: sirve para mostrar el impacto antes de confirmar (preview de un codigo).
+pub fn preview_from(mods: &[modlist::InstalledMod], profile: &Profile) -> ApplyReport {
     let want: BTreeSet<&str> = profile.enabled_ids.iter().map(String::as_str).collect();
-    let mods = modlist::scan(install)?;
     let installed: BTreeSet<&str> = mods.iter().map(|m| m.id()).collect();
     let mut report = ApplyReport::default();
 
     for m in mods.iter().filter(|m| m.enabled) {
         if !want.contains(m.id()) {
-            manager::disable(install, m.id())?;
             report.disabled.push(m.id().to_string());
         }
     }
@@ -116,9 +121,23 @@ pub fn apply(install: &Install, profile: &Profile) -> Result<ApplyReport> {
         }
         let already_enabled = mods.iter().any(|m| m.id() == id && m.enabled);
         if !already_enabled {
-            manager::enable(install, id)?;
             report.enabled.push(id.clone());
         }
+    }
+    report
+}
+
+/// Aplica un perfil: deshabilita los mods habilitados que no esten en el perfil y habilita
+/// los del perfil que esten deshabilitados. Los ids del perfil que no esten instalados se
+/// reportan en `not_installed`. Exige juego cerrado (lo verifica `manager`).
+pub fn apply(install: &Install, profile: &Profile) -> Result<ApplyReport> {
+    let mods = modlist::scan(install)?;
+    let report = preview_from(&mods, profile);
+    for id in &report.disabled {
+        manager::disable(install, id)?;
+    }
+    for id in &report.enabled {
+        manager::enable(install, id)?;
     }
     Ok(report)
 }
@@ -177,5 +196,36 @@ mod tests {
         assert!(disabled.join("Extra").is_dir());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn preview_from_es_puro_y_coincide_con_apply() {
+        // preview_from no toca el disco: calcula sobre una lista ya escaneada.
+        let mods = vec![
+            modlist::InstalledMod::fake("BaseLib", true),
+            modlist::InstalledMod::fake("Extra", true),
+            modlist::InstalledMod::fake("Char", false),
+        ];
+        let prof = Profile {
+            name: "p".into(),
+            enabled_ids: vec!["BaseLib".into(), "Char".into(), "Falta".into()],
+        };
+        let r = preview_from(&mods, &prof);
+        assert_eq!(r.enabled, vec!["Char".to_string()]); // estaba deshabilitado
+        assert_eq!(r.disabled, vec!["Extra".to_string()]); // sobra
+        assert_eq!(r.not_installed, vec!["Falta".to_string()]); // no instalado
+        assert!(!r.is_noop());
+
+        // Aplicar el estado destino sobre si mismo es un no-op.
+        let after = vec![
+            modlist::InstalledMod::fake("BaseLib", true),
+            modlist::InstalledMod::fake("Extra", false),
+            modlist::InstalledMod::fake("Char", true),
+        ];
+        let prof2 = Profile {
+            name: "p".into(),
+            enabled_ids: vec!["BaseLib".into(), "Char".into()],
+        };
+        assert!(preview_from(&after, &prof2).is_noop());
     }
 }
