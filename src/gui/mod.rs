@@ -195,6 +195,10 @@ struct App {
     // Pestaña Publicar
     pub_name: String,
     pub_version: String,
+    // Auto-completar la version: worker que resuelve el ultimo release del repo y propone la
+    // siguiente; `autofilled` evita re-pedirlo y no pisar lo que el usuario tipee.
+    pub_version_job: Option<Receiver<String>>,
+    pub_version_autofilled: bool,
     pub_repo: String, // "owner/repo" (recordado en config para no recrear repos)
     pub_profile: Option<String>, // None = mods habilitados actuales
     pub_out_dir: Option<PathBuf>,
@@ -255,6 +259,8 @@ impl App {
             new_profile: String::new(),
             pub_name,
             pub_version: String::new(),
+            pub_version_job: None,
+            pub_version_autofilled: false,
             pub_repo,
             pub_profile: None,
             pub_out_dir: None,

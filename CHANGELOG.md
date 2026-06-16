@@ -3,6 +3,24 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.12.0] - 2026-06-15 — publicar incremental (solo lo que cambio) + version automatica
+
+- **Publicar ahora SUBE solo los mods que cambiaron.** Antes cada version creaba un release nuevo y
+  re-subia TODOS los assets (un `.pck` de 100+ MB se re-subia aunque no cambiara). Ahora los assets
+  (content-addressed por BLAKE3) van a UN release acumulativo (`modsync-assets`, marcado prerelease)
+  y publicar una version sube **solo los blake3 que falten** ahi — los que no cambiaron no se
+  re-suben. El release de la VERSION (el que `/releases/latest` devuelve) lleva solo el manifest
+  chico, con su `base_url` apuntando al release de assets. Nuevo: `github::upload_new_assets`
+  (incremental), `ASSETS_TAG`/`assets_base_url`, `collect_manifest_files`/`collect_asset_files`. El
+  `--base-url` legacy sigue subiendo todo a ese release (`publish::upload_to_release`).
+- **La version se autocompleta.** Al abrir Publicar (con un repo recordado), la app resuelve el
+  ultimo release del repo y propone la **siguiente** version (`publish::next_version`: incrementa el
+  ultimo grupo de digitos, p.ej. `1.2.0`→`1.2.1`, `2026.06.14`→`2026.06.15`), asi no hay que tipearla.
+  Es editable. CLI sin cambios (sigue pidiendo `--version`).
+- **Los amigos ya bajaban solo lo que cambio** (no es nuevo, se confirma): `sync::plan` compara el
+  BLAKE3 de cada archivo y baja unicamente los que faltan o cambiaron (+ el delta intra-`.pck` baja
+  solo el diff de un `.pck` cambiado). Con el publish incremental, ahora AMBOS lados son incrementales.
+
 ## [1.11.2] - 2026-06-15 — fix: modo claro tenia el area central con FONDO NEGRO
 
 - **El fondo del area central ya no queda negro en modo claro.** El `Frame` del contenido central era

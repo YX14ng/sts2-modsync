@@ -31,12 +31,63 @@ impl App {
         }
     }
 
+    /// Auto-completa el campo Version (una vez): resuelve el ULTIMO release del repo y propone la
+    /// siguiente, asi el modder no la tiene que tipear. No pisa lo que el usuario ya haya escrito.
+    fn maybe_autofill_version(&mut self, ctx: &egui::Context) {
+        if self.pub_version_autofilled || self.pub_version_job.is_some() {
+            return;
+        }
+        if !self.pub_version.trim().is_empty() {
+            self.pub_version_autofilled = true; // el usuario ya tiene una version
+            return;
+        }
+        let Some(repo) = crate::github::normalize_repo(&self.pub_repo) else {
+            return; // sin repo valido todavia: reintenta cuando lo haya
+        };
+        let Some((owner, name)) = repo.split_once('/') else {
+            return;
+        };
+        let (owner, name) = (owner.to_string(), name.to_string());
+        self.pub_version_autofilled = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.pub_version_job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let proposed = crate::transport::latest_release_tag(&owner, &name)
+                .ok()
+                .flatten()
+                .map(|t| crate::publish::next_version(&t))
+                .unwrap_or_else(|| "1.0.0".to_string());
+            let _ = tx.send(proposed);
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_autoversion(&mut self) {
+        let Some(rx) = &self.pub_version_job else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(v) => {
+                // Solo si el usuario no escribio nada entretanto (no pisar lo suyo).
+                if self.pub_version.trim().is_empty() {
+                    self.pub_version = v;
+                }
+                self.pub_version_job = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pub_version_job = None,
+        }
+    }
+
     pub(super) fn ui_publish(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.install.is_none() {
             ui.label("Detecta el juego para publicar un set.");
             return;
         }
         self.gh_check_stored(ctx);
+        self.maybe_autofill_version(ctx);
+        self.poll_autoversion();
         self.ui_github_connect(ui, ctx);
         if !self.profiles_loaded {
             self.profiles = profile::list();
@@ -63,7 +114,15 @@ impl App {
         self.ui_gh_repo_picker(ui, ctx);
         ui.horizontal(|ui| {
             ui.label("Version (= tag del release):");
-            ui.add(egui::TextEdit::singleline(&mut self.pub_version).desired_width(160.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.pub_version)
+                    .hint_text("se autocompleta")
+                    .desired_width(160.0),
+            );
+            if self.pub_version_job.is_some() {
+                ui.spinner();
+                ui.label(egui::RichText::new("proponiendo la siguiente...").weak());
+            }
         });
         // Mostrar a donde va exactamente: cada publicacion es un RELEASE NUEVO en ese repo.
         if let Some(repo) = crate::github::normalize_repo(&self.pub_repo) {
@@ -255,16 +314,20 @@ impl App {
         self.cfg.publish_repo = Some(repo.clone());
         self.cfg.publish_set_name = Some(set_name.clone());
         let _ = config::save(&self.cfg);
+        // El base_url del manifest apunta al release ACUMULATIVO de assets (incremental): ahi viven
+        // los assets content-addressed; el manifest va al release de la version.
         let params = publish::PublishParams {
-            base_url: crate::github::release_base_url(&repo, &version),
+            base_url: crate::github::assets_base_url(&repo),
             set_name,
-            set_version: version,
+            set_version: version.clone(),
             published_at: String::new(),
             baselib_version: None,
         };
+        let upload_repo = repo.clone();
+        let upload_version = version;
         self.run_action(
             ctx,
-            "publicando (hasheando + subiendo al release)...".into(),
+            "publicando (hasheando + subiendo solo lo que cambio)...".into(),
             move || {
                 let mods = modlist::scan(&install)?;
                 let mut prep = publish::prepare(&mods, &ids, &params)?;
@@ -272,7 +335,7 @@ impl App {
                 // falla, se publica sin deltas). Los amigos al dia bajan solo el diff.
                 let deltas = publish::add_deltas(&mut prep, &out_dir).unwrap_or_default();
                 publish::write_out(&prep, &out_dir)?;
-                let url = publish::upload(&out_dir, &params.base_url)?;
+                let url = publish::upload(&out_dir, &upload_repo, &upload_version)?;
                 let extra = if deltas.patches > 0 {
                     format!(
                         " · {} delta(s) ({:.1} MB)",

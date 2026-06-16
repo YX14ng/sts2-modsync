@@ -17,6 +17,11 @@ pub const OAUTH_CLIENT_ID: &str = "";
 
 /// Scope minimo para crear repos PUBLICOS + releases + subir assets.
 const OAUTH_SCOPE: &str = "public_repo";
+
+/// Tag del release ACUMULATIVO de assets (content-addressed por BLAKE3). Es un PRERELEASE para que
+/// `/releases/latest` lo excluya (asi "el ultimo release" sigue siendo el de la version, que solo
+/// lleva el manifest). Publicar una version sube SOLO los blake3 que falten aca -> upload incremental.
+pub const ASSETS_TAG: &str = "modsync-assets";
 const UA: &str = concat!("sts2-modsync/", env!("CARGO_PKG_VERSION"));
 const API_VERSION: &str = "2022-11-28";
 const KEYRING_SERVICE: &str = "sts2-modsync";
@@ -296,7 +301,8 @@ impl Api {
         files: &[(String, PathBuf)],
         mut on_progress: impl FnMut(usize, usize),
     ) -> Result<String> {
-        let (release_id, upload_url, html_url) = self.get_or_create_release(owner, repo, tag)?;
+        let (release_id, upload_url, html_url) =
+            self.get_or_create_release(owner, repo, tag, false)?;
         let existing = self.list_assets(owner, repo, release_id)?;
         let total = files.len();
         for (i, (name, path)) in files.iter().enumerate() {
@@ -322,6 +328,65 @@ impl Api {
         Ok(html_url)
     }
 
+    /// Sube al release `tag` (PRERELEASE acumulativo de assets) SOLO los `files` cuyo nombre
+    /// (= su BLAKE3) NO este ya ahi. Como los assets son content-addressed, un nombre ya presente
+    /// ES identico: no se re-sube (upload INCREMENTAL). Asi una version nueva solo sube los `.pck`
+    /// que cambiaron. Devuelve cuantos se subieron. NO borra nada (los blake3 viejos quedan para los
+    /// amigos en versiones anteriores).
+    pub fn upload_new_assets(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        files: &[(String, PathBuf)],
+        mut on_progress: impl FnMut(usize, usize),
+    ) -> Result<usize> {
+        let (release_id, upload_url, _) = self.get_or_create_release(owner, repo, tag, true)?;
+        // Reforzar prerelease por si el release ya existia SIN el flag (sino /releases/latest podria
+        // devolverlo y los amigos por-repo quedarian con un manifest 404). Best-effort.
+        let _ = self.set_prerelease(owner, repo, release_id);
+        let existing = self.list_assets(owner, repo, release_id)?;
+        let pending: Vec<&(String, PathBuf)> = files
+            .iter()
+            .filter(|(name, _)| !existing.contains_key(name))
+            .collect();
+        let total = pending.len();
+        for (i, (name, path)) in pending.iter().enumerate() {
+            let resp = self.upload_one(&upload_url, name, path)?;
+            if resp.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+                // Aparecio entremedio (otro publish concurrente subio el mismo blake3): ya esta, sigo.
+                if !self
+                    .list_assets(owner, repo, release_id)?
+                    .contains_key(name)
+                {
+                    self.upload_one(&upload_url, name, path)?
+                        .error_for_status()
+                        .with_context(|| format!("subiendo asset {name} (reintento)"))?;
+                }
+            } else {
+                resp.error_for_status()
+                    .with_context(|| format!("subiendo asset {name}"))?;
+            }
+            on_progress(i + 1, total);
+        }
+        Ok(total)
+    }
+
+    /// Marca un release como PRERELEASE (idempotente). Asegura que el release ACUMULATIVO de assets
+    /// quede excluido de `/releases/latest` aunque ya existiera sin ese flag.
+    fn set_prerelease(&self, owner: &str, repo: &str, release_id: u64) -> Result<()> {
+        self.req(
+            reqwest::Method::PATCH,
+            &format!("https://api.github.com/repos/{owner}/{repo}/releases/{release_id}"),
+        )
+        .json(&serde_json::json!({ "prerelease": true }))
+        .send()
+        .context("PATCH release")?
+        .error_for_status()
+        .context("marcando el release de assets como prerelease")?;
+        Ok(())
+    }
+
     /// Un POST de subida del asset `name` (streamea el archivo, no lo carga entero en RAM).
     fn upload_one(
         &self,
@@ -339,13 +404,15 @@ impl Api {
     }
 
     /// (release_id, upload_url sin el template `{?name,label}`, html_url). Crea el release SOLO
-    /// si el GET por tag da 404; cualquier otro error del GET (401/403/5xx) se PROPAGA (no se
-    /// crea un release espurio). El create maneja el 422 'already_exists' con un re-GET.
+    /// si el GET por tag da 404 (con `prerelease` segun se pida); cualquier otro error del GET
+    /// (401/403/5xx) se PROPAGA (no se crea un release espurio). El create maneja el 422
+    /// 'already_exists' con un re-GET.
     fn get_or_create_release(
         &self,
         owner: &str,
         repo: &str,
         tag: &str,
+        prerelease: bool,
     ) -> Result<(u64, String, String)> {
         let get = self
             .req(
@@ -358,7 +425,7 @@ impl Api {
         let rel: ReleaseInfo = if status.is_success() {
             get.json().context("parseando release")?
         } else if status == reqwest::StatusCode::NOT_FOUND {
-            self.create_release(owner, repo, tag)?
+            self.create_release(owner, repo, tag, prerelease)?
         } else {
             let body = get.text().unwrap_or_default();
             bail!("error consultando el release {tag} (HTTP {status}): {body}");
@@ -374,7 +441,13 @@ impl Api {
     }
 
     /// Crea el release del tag; si choca con 422 (otro lo creo entremedio) hace re-GET por tag.
-    fn create_release(&self, owner: &str, repo: &str, tag: &str) -> Result<ReleaseInfo> {
+    fn create_release(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        prerelease: bool,
+    ) -> Result<ReleaseInfo> {
         let post = self
             .req(
                 reqwest::Method::POST,
@@ -384,6 +457,7 @@ impl Api {
                 "tag_name": tag,
                 "name": tag,
                 "body": "Set de mods publicado con sts2-modsync.",
+                "prerelease": prerelease,
             }))
             .send()
             .context("POST release")?;
@@ -532,6 +606,12 @@ pub fn release_base_url(repo: &str, version: &str) -> String {
     )
 }
 
+/// `base_url` del release ACUMULATIVO de assets de `repo` ([`ASSETS_TAG`]). Es el que va en el
+/// manifest: los assets (content-addressed por blake3) viven ahi, no en el release de la version.
+pub fn assets_base_url(repo: &str) -> String {
+    release_base_url(repo, ASSETS_TAG)
+}
+
 /// Deriva (owner, repo, tag) de un `base_url` de release de GitHub:
 /// `https://github.com/<owner>/<repo>/releases/download/<tag>/`.
 pub fn parse_release_base_url(base_url: &str) -> Option<(String, String, String)> {
@@ -548,10 +628,10 @@ pub fn parse_release_base_url(base_url: &str) -> Option<(String, String, String)
     }
 }
 
-/// Junta los archivos a subir (nombre-de-asset -> path) de una carpeta de publicacion:
-/// `set-manifest.json`, su `.minisig` (si esta), `set.torrent` (si esta), y `assets/*` (cada uno
-/// nombrado por su blake3). El nombre del asset es el basename — el transporte baja por blake3.
-pub fn collect_upload_files(out_dir: &Path) -> Vec<(String, PathBuf)> {
+/// Los archivos del MANIFEST (chicos) que van al release de la VERSION: `set-manifest.json`, su
+/// `.minisig` (si esta) y `set.torrent` (si esta). Cambian en cada version, por eso se suben con
+/// clobber al release de esa version (el que `/releases/latest` devuelve).
+pub fn collect_manifest_files(out_dir: &Path) -> Vec<(String, PathBuf)> {
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     let mut add = |name: &str, p: PathBuf| {
         if p.is_file() {
@@ -564,6 +644,13 @@ pub fn collect_upload_files(out_dir: &Path) -> Vec<(String, PathBuf)> {
         out_dir.join("set-manifest.json.minisig"),
     );
     add("set.torrent", out_dir.join("set.torrent"));
+    files
+}
+
+/// Los ASSETS (`assets/*`, cada uno nombrado por su blake3) que van al release ACUMULATIVO
+/// ([`ASSETS_TAG`]). Content-addressed: un nombre ya presente alla es identico y no se re-sube.
+pub fn collect_asset_files(out_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(out_dir.join("assets")) {
         for e in rd.flatten() {
             let p = e.path();

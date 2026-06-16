@@ -251,6 +251,12 @@ impl App {
     /// Fija el repo de publicacion y lo RECUERDA (config.publish_repo) — al elegir/crear uno, no hace
     /// falta esperar a publicar para que quede guardado.
     fn select_publish_repo(&mut self, repo: String) {
+        // Si cambia el repo y el usuario NO tipeo una version, re-proponer la siguiente para el repo
+        // NUEVO (sino quedaria la propuesta del repo anterior). No pisar lo que el usuario escribio.
+        if repo != self.pub_repo && self.pub_version.trim().is_empty() {
+            self.pub_version_autofilled = false;
+            self.pub_version_job = None;
+        }
         self.pub_repo = repo.clone();
         self.cfg.publish_repo = Some(repo);
         let _ = crate::config::save(&self.cfg);

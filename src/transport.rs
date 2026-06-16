@@ -188,6 +188,37 @@ pub fn resolve_latest_manifest(owner: &str, repo: &str) -> Result<String> {
     manifest_url_from_latest(owner, repo, &body)
 }
 
+/// El tag del ULTIMO release (no-draft, no-prerelease) de un repo PUBLICO de GitHub. `Ok(None)` si el
+/// repo no tiene releases (404). Sirve para proponer la version SIGUIENTE al publicar (auto-completar).
+/// El release ACUMULATIVO de assets (`github::ASSETS_TAG`) es prerelease, asi que `/releases/latest`
+/// lo excluye y devuelve el ultimo release de VERSION.
+pub fn latest_release_tag(owner: &str, repo: &str) -> Result<Option<String>> {
+    let api = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("construir cliente http")?;
+    let resp = client
+        .get(&api)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .with_context(|| format!("GET {api}"))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None); // sin releases todavia
+    }
+    let body = resp
+        .error_for_status()
+        .context("github api (releases/latest)")?
+        .text()?;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).context("json invalido de releases/latest")?;
+    Ok(v.get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string))
+}
+
 /// Parsea el JSON de `releases/latest` y arma la URL del `set-manifest.json` de ese release.
 /// Helper puro (testeable sin red) de [`resolve_latest_manifest`]. El `tag` se valida con
 /// `github::valid_tag` (la MISMA regla que el lado publish): rechaza `/`, `..`, espacios y demas

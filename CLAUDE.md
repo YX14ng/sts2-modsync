@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.11.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.12.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -67,11 +67,18 @@ invariantes, pero el flujo lanzado por el protocolo no tiene prompt).
   GitHub Release (`reqwest` **blocking**, sin tokio), verifica BLAKE3, renombra, manda huerfanos a
   la papelera, aborta si el juego corre. La pestaña Sync del GUI baja/instala de verdad.
 - **Publicar (añadido, modder):** `publish` genera el set-manifest + assets desde tus mods (hashea
-  BLAKE3) y **los SUBE al GitHub Release** via `gh` CLI (`publish::upload` deriva owner/repo/tag del
-  `--base-url` y sube manifest + `.minisig` + assets en lotes; `--no-upload` solo genera local). Sin
-  esa subida el Release queda vacio y la sync por URL daba 404. Los assets son **content-addressed**
-  (nombre = el blake3): los assets de un Release son PLANOS, asi que el transporte baja por
+  BLAKE3). Los assets son **content-addressed** (nombre = el blake3): el transporte baja por
   `base_url + blake3`, NO por `entry.path` (que queda solo para instalar local).
+  **Upload INCREMENTAL (1.12.0):** los assets van a UN release ACUMULATIVO (`github::ASSETS_TAG` =
+  `modsync-assets`, marcado PRERELEASE para que `/releases/latest` lo excluya) y `publish::upload`
+  sube **solo los blake3 que falten** ahi (`Api::upload_new_assets` lista los presentes y saltea los
+  iguales) — un `.pck` que no cambio NO se re-sube. El MANIFEST (chico) va al release de la VERSION
+  (el que `/releases/latest` devuelve), con su `base_url = assets_base_url(repo)` apuntando al release
+  de assets. `collect_manifest_files` vs `collect_asset_files`. El `--base-url` legacy sube TODO a ese
+  release (`upload_to_release`). Con login sube por la API REST; sin login, por `gh` CLI (lista los
+  assets presentes con `gh release view` para subir solo los que falten). `--no-upload` solo genera
+  local. **Version automatica:** el GUI propone la siguiente version (`publish::next_version` sobre el
+  ultimo release via `transport::latest_release_tag`); editable.
   **FASE 3:** delta intra-`.pck` (bita), auto-update, HTTP Range/resume. Detalle en HANDOFF.md.
   **OJO publicar sets vs auto-update:** publica los SETS DE MODS en un repo APARTE del de la app. Si
   usas el mismo, el filtro `v*` del auto-update (`update::check_latest` lista `/releases` y elige el

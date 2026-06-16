@@ -245,6 +245,29 @@ pub fn add_deltas(prep: &mut Prepared, out_dir: &Path) -> Result<DeltaReport> {
     Ok(report)
 }
 
+/// Propone la version SIGUIENTE a partir de la anterior (para auto-completar el campo al publicar):
+/// incrementa el ULTIMO grupo de digitos preservando los ceros a la izquierda ("1.2.0" -> "1.2.1",
+/// "2026.06.14" -> "2026.06.15", "v3" -> "v4"); si no hay digitos agrega ".1"; vacio -> "1.0.0".
+/// Es solo una SUGERENCIA editable; garantiza monotonia razonable para el indicador "version nueva".
+pub fn next_version(prev: &str) -> String {
+    let prev = prev.trim();
+    if prev.is_empty() {
+        return "1.0.0".to_string();
+    }
+    let bytes = prev.as_bytes();
+    let Some(end) = bytes.iter().rposition(u8::is_ascii_digit) else {
+        return format!("{prev}.1"); // sin digitos (ej "beta"): proponer "beta.1"
+    };
+    let start = bytes[..=end]
+        .iter()
+        .rposition(|b| !b.is_ascii_digit())
+        .map_or(0, |i| i + 1);
+    let num = &prev[start..=end];
+    let width = num.len(); // preservar ancho con ceros ("06" -> "07", "09" -> "10")
+    let next = num.parse::<u64>().map(|n| n + 1).unwrap_or(1);
+    format!("{}{next:0width$}{}", &prev[..start], &prev[end + 1..])
+}
+
 /// Avisos: el set deberia incluir BaseLib + ModListSorter (orden de carga multiplayer).
 pub fn warnings(ids: &BTreeSet<String>) -> Vec<String> {
     let mut w = Vec::new();
@@ -309,84 +332,200 @@ fn run_gh(args: &[&str]) -> Result<std::process::Output> {
         .context("no se pudo ejecutar `gh` (¿esta instalado y logueado el GitHub CLI?)")
 }
 
-/// Sube el contenido de `out_dir` (set-manifest.json + .minisig + assets/*) al GitHub Release
-/// derivado de `base_url`. Si hay un token de GitHub guardado (login en la app), sube por la
-/// **API REST** (sin depender del `gh` CLI); si no, cae al `gh` CLI. Devuelve la URL del release.
-pub fn upload(out_dir: &Path, base_url: &str) -> Result<String> {
-    if let Some(token) = crate::github::load_token() {
-        return upload_via_api(out_dir, base_url, &token);
-    }
-    upload_via_gh(out_dir, base_url)
+fn split_repo(repo: &str) -> Result<(&str, &str)> {
+    repo.split_once('/')
+        .filter(|(o, r)| !o.is_empty() && !r.is_empty())
+        .context("repo invalido (usa owner/repo)")
 }
 
-/// Sube por la API REST de GitHub (token guardado en el llavero). Crea el repo del usuario si
-/// falta, crea/usa el release del tag, y sube con clobber el manifest + firma + torrent + assets.
-fn upload_via_api(out_dir: &Path, base_url: &str, token: &str) -> Result<String> {
-    let (owner, repo, tag) = crate::github::parse_release_base_url(base_url).context(
-        "el base_url no es una URL de release de GitHub \
-         (https://github.com/<owner>/<repo>/releases/download/<tag>/)",
-    )?;
+/// Sube `out_dir` a GitHub de forma **INCREMENTAL**: los ASSETS (content-addressed) van al release
+/// ACUMULATIVO ([`github::ASSETS_TAG`], y SOLO se suben los blake3 que falten alla -> los `.pck` que
+/// no cambiaron no se re-suben) y el MANIFEST (+minisig+torrent) va al release de la `version` (el
+/// que `/releases/latest` devuelve, con su `base_url` apuntando al release de assets). Con token
+/// guardado usa la API REST; si no, el `gh` CLI. `repo` = "owner/repo". Devuelve la URL del release
+/// de la version.
+pub fn upload(out_dir: &Path, repo: &str, version: &str) -> Result<String> {
+    if let Some(token) = crate::github::load_token() {
+        return upload_via_api(out_dir, repo, version, &token);
+    }
+    upload_via_gh(out_dir, repo, version)
+}
+
+fn upload_via_api(out_dir: &Path, repo: &str, version: &str, token: &str) -> Result<String> {
+    let (owner, repo_name) = split_repo(repo)?;
     let api = crate::github::Api::new(token.to_string());
     let login = api.whoami().context("validando el token de GitHub")?;
     // Crear el repo SOLO si va bajo el usuario del token (POST /user/repos crea ahi). Si el owner
     // es una org u otro usuario, el repo debe existir; el release dara un error claro si no.
     if owner.eq_ignore_ascii_case(&login) {
-        api.ensure_repo(&repo)
+        api.ensure_repo(repo_name)
             .context("creando el repo en GitHub")?;
     }
-    let files = crate::github::collect_upload_files(out_dir);
-    api.publish_assets(&owner, &repo, &tag, &files, |_, _| {})
+    // 1) Assets -> release acumulativo (incremental: solo los blake3 que falten).
+    let assets = crate::github::collect_asset_files(out_dir);
+    api.upload_new_assets(
+        owner,
+        repo_name,
+        crate::github::ASSETS_TAG,
+        &assets,
+        |_, _| {},
+    )
+    .context("subiendo los assets (incremental) al release acumulativo")?;
+    // 2) Manifest (+minisig+torrent) -> release de la VERSION.
+    let manifest_files = crate::github::collect_manifest_files(out_dir);
+    api.publish_assets(owner, repo_name, version, &manifest_files, |_, _| {})
+        .context("subiendo el manifest al release de la version")
 }
 
-/// Sube via el `gh` CLI (fallback si no hay token guardado). Devuelve la URL del release.
-fn upload_via_gh(out_dir: &Path, base_url: &str) -> Result<String> {
+fn upload_via_gh(out_dir: &Path, repo: &str, version: &str) -> Result<String> {
+    let (owner, repo_name) = split_repo(repo)?;
+    let assets_tag = crate::github::ASSETS_TAG;
+    // 1) Release acumulativo de assets (prerelease): crearlo si falta y subir SOLO los que falten.
+    let _ = run_gh(&[
+        "release",
+        "create",
+        assets_tag,
+        "--repo",
+        repo,
+        "--prerelease",
+        "--title",
+        assets_tag,
+        "--notes",
+        "Assets content-addressed (sts2-modsync); no borrar.",
+    ]);
+    let existing = gh_existing_assets(repo, assets_tag);
+    let assets: Vec<PathBuf> = std::fs::read_dir(out_dir.join("assets"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| !existing.contains(n))
+        })
+        .collect();
+    // clobber=true: content-addressed (nombre == blake3), re-subir bytes IDENTICOS sobre un nombre
+    // identico es idempotente. Asi un listado fallido (gh_existing_assets vacio) NO aborta el publish
+    // por "asset already exists" — el filtro queda como pura optimizacion de ancho de banda.
+    gh_upload_batches(repo, assets_tag, &assets, true)?;
+    // Reforzar el flag prerelease por si el release ya existia sin el (sino /releases/latest podria
+    // devolverlo y los amigos por-repo quedarian con un manifest 404). Best-effort.
+    let _ = run_gh(&[
+        "release",
+        "edit",
+        assets_tag,
+        "--repo",
+        repo,
+        "--prerelease",
+    ]);
+    // 2) Release de la VERSION: subir el manifest (+minisig+torrent) con clobber.
+    let _ = run_gh(&[
+        "release",
+        "create",
+        version,
+        "--repo",
+        repo,
+        "--title",
+        version,
+        "--notes",
+        "Set de mods publicado con sts2-modsync.",
+    ]);
+    let mut manifest_files: Vec<PathBuf> = vec![out_dir.join("set-manifest.json")];
+    for extra in ["set-manifest.json.minisig", "set.torrent"] {
+        let p = out_dir.join(extra);
+        if p.is_file() {
+            manifest_files.push(p);
+        }
+    }
+    gh_upload_batches(repo, version, &manifest_files, true)?; // clobber: cambian por version
+    Ok(format!(
+        "https://github.com/{owner}/{repo_name}/releases/tag/{version}"
+    ))
+}
+
+/// LEGACY (`--base-url`): sube TODO (manifest + assets) a UN release (el del `base_url`). NO es
+/// incremental; se conserva para hosting/flujo custom donde el `base_url` no es el de assets. La via
+/// recomendada es [`upload`] (incremental, por repo).
+pub fn upload_to_release(out_dir: &Path, base_url: &str) -> Result<String> {
     let (owner, repo, tag) = crate::github::parse_release_base_url(base_url).context(
         "el base_url no es una URL de release de GitHub \
          (https://github.com/<owner>/<repo>/releases/download/<tag>/) — subi a mano",
     )?;
-    let repo_arg = format!("{owner}/{repo}");
-
-    // 1) Crear el release (si ya existe, gh falla -> se ignora; el release existe).
+    let repo_full = format!("{owner}/{repo}");
+    let mut files = crate::github::collect_manifest_files(out_dir);
+    files.extend(crate::github::collect_asset_files(out_dir));
+    if let Some(token) = crate::github::load_token() {
+        let api = crate::github::Api::new(token);
+        let login = api.whoami().context("validando el token de GitHub")?;
+        if owner.eq_ignore_ascii_case(&login) {
+            api.ensure_repo(&repo)
+                .context("creando el repo en GitHub")?;
+        }
+        return api.publish_assets(&owner, &repo, &tag, &files, |_, _| {});
+    }
     let _ = run_gh(&[
         "release",
         "create",
         &tag,
         "--repo",
-        &repo_arg,
+        &repo_full,
         "--title",
         &tag,
         "--notes",
         "Set de mods publicado con sts2-modsync.",
     ]);
+    let paths: Vec<PathBuf> = files.into_iter().map(|(_, p)| p).collect();
+    gh_upload_batches(&repo_full, &tag, &paths, true)?;
+    Ok(format!(
+        "https://github.com/{owner}/{repo}/releases/tag/{tag}"
+    ))
+}
 
-    // 2) Juntar archivos: manifest + firma (si esta) + todos los assets.
-    let mut files: Vec<PathBuf> = vec![out_dir.join("set-manifest.json")];
-    let sig = out_dir.join("set-manifest.json.minisig");
-    if sig.exists() {
-        files.push(sig);
+/// Nombres de los assets ya presentes en el release `tag` (via `gh release view`). Best-effort: si
+/// falla, devuelve vacio -> se re-suben todos. Eso es seguro PORQUE `gh_upload_batches` usa
+/// `--clobber` en el lote de assets (content-addressed: sobreescribe bytes identicos con identicos);
+/// el listado es solo una optimizacion para no re-subir lo que no cambio.
+fn gh_existing_assets(repo: &str, tag: &str) -> std::collections::BTreeSet<String> {
+    match run_gh(&[
+        "release",
+        "view",
+        tag,
+        "--repo",
+        repo,
+        "--json",
+        "assets",
+        "--jq",
+        ".assets[].name",
+    ]) {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        _ => std::collections::BTreeSet::new(),
     }
-    let torrent = out_dir.join("set.torrent");
-    if torrent.exists() {
-        files.push(torrent);
-    }
-    if let Ok(rd) = std::fs::read_dir(out_dir.join("assets")) {
-        for e in rd.flatten() {
-            if e.path().is_file() {
-                files.push(e.path());
-            }
-        }
-    }
+}
 
-    // 3) Subir en lotes (limite de longitud de comando en Windows).
+/// Sube `files` al release `tag` en lotes (limite de longitud de comando en Windows). `clobber`
+/// reemplaza los que ya existan: lo usan tanto los assets (idempotente: nombre == blake3) como el
+/// manifest (cambia por version). El legacy (`upload_to_release`) tambien clobberea.
+fn gh_upload_batches(repo: &str, tag: &str, files: &[PathBuf], clobber: bool) -> Result<()> {
     for batch in files.chunks(40) {
+        if batch.is_empty() {
+            continue;
+        }
         let mut args: Vec<String> = vec![
             "release".into(),
             "upload".into(),
-            tag.clone(),
+            tag.into(),
             "--repo".into(),
-            repo_arg.clone(),
-            "--clobber".into(),
+            repo.into(),
         ];
+        if clobber {
+            args.push("--clobber".into());
+        }
         for f in batch {
             args.push(f.to_string_lossy().to_string());
         }
@@ -399,22 +538,20 @@ fn upload_via_gh(out_dir: &Path, base_url: &str) -> Result<String> {
             );
         }
     }
-
-    Ok(format!(
-        "https://github.com/{owner}/{repo}/releases/tag/{tag}"
-    ))
+    Ok(())
 }
 
-/// Comando sugerido para subir todo a un GitHub Release con el `gh` CLI (fallback si no se puede
-/// subir automaticamente). El tag = `<tag>` del `base_url`. Incluye el `.minisig` si se firmo.
+/// Comandos sugeridos para subir a mano con el `gh` CLI (fallback). Los assets van al release
+/// ACUMULATIVO (prerelease) y el manifest al release de la version. Incluye `.minisig` si se firmo.
 pub fn gh_hint(set_version: &str, out_dir: &Path) -> String {
     let sig = if out_dir.join("set-manifest.json.minisig").exists() {
         " set-manifest.json.minisig"
     } else {
         ""
     };
+    let assets = crate::github::ASSETS_TAG;
     format!(
-        "cd \"{}\" && gh release create {set_version} set-manifest.json{sig} assets/*",
+        "cd \"{}\"\n  gh release create {assets} --prerelease assets/*   (o si ya existe: gh release upload {assets} assets/*)\n  gh release create {set_version} set-manifest.json{sig}",
         out_dir.display()
     )
 }
@@ -436,6 +573,18 @@ mod tests {
         for (rel, content) in files {
             std::fs::write(dir.join(rel), content).unwrap();
         }
+    }
+
+    #[test]
+    fn next_version_incrementa_el_ultimo_grupo_de_digitos() {
+        assert_eq!(next_version("1.2.0"), "1.2.1");
+        assert_eq!(next_version("2026.06.14"), "2026.06.15"); // preserva el ancho del dia
+        assert_eq!(next_version("2026.06.09"), "2026.06.10"); // crece de ancho
+        assert_eq!(next_version("v3"), "v4");
+        assert_eq!(next_version("v1.9"), "v1.10");
+        assert_eq!(next_version("beta"), "beta.1"); // sin digitos
+        assert_eq!(next_version(""), "1.0.0");
+        assert_eq!(next_version("  1.0 "), "1.1"); // trim
     }
 
     #[test]

@@ -347,11 +347,13 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
     let version = flag(args, "--version").context("falta --version")?;
     let out = flag(args, "--out").unwrap_or("./set-publish");
 
-    // Resolver base_url + repo: --base-url explicito, o --repo, o el repo RECORDADO de antes.
+    // Resolver base_url + repo: --base-url explicito (LEGACY, sube todo a ESE release), o --repo / el
+    // repo RECORDADO (INCREMENTAL: assets al release acumulativo, manifest al de la version).
     let mut cfg = config::load();
-    let (base_url, repo, set_version) = if let Some(b) = flag(args, "--base-url") {
+    let legacy_base_url = flag(args, "--base-url").map(str::to_string);
+    let (base_url, repo, set_version) = if let Some(b) = &legacy_base_url {
         (
-            b.to_string(),
+            b.clone(),
             github::parse_release_base_url(b).map(|(o, r, _)| format!("{o}/{r}")),
             version.trim().to_string(),
         )
@@ -365,9 +367,9 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         let tag = github::valid_tag(version).with_context(|| {
             format!("version/tag invalido: {version:?} (sin espacios, '/' ni caracteres raros; ej v1.2.3)")
         })?;
-        // El tag validado va a base_url Y a set_version (no la version cruda: evita que whitespace/
-        // CRLF de los extremos termine en el set_version del manifest FIRMADO).
-        (github::release_base_url(&repo, &tag), Some(repo), tag)
+        // El base_url del manifest apunta al release ACUMULATIVO de assets (no al de la version): ahi
+        // viven los assets content-addressed. El tag validado es el del release de la VERSION.
+        (github::assets_base_url(&repo), Some(repo), tag)
     };
     let base_url = base_url.as_str();
 
@@ -406,7 +408,7 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
     );
     let params = publish::PublishParams {
         set_name: name.to_string(),
-        set_version,
+        set_version: set_version.clone(),
         base_url: base_url.to_string(),
         published_at: String::new(),
         baselib_version: None,
@@ -452,7 +454,13 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
             "gh CLI (no hay login; usa `github-login <token>` para subir por API)"
         };
         println!("\nSubiendo al GitHub Release via {via}...");
-        match publish::upload(out_dir, base_url) {
+        // Incremental por repo, salvo --base-url legacy (sube todo a ese release).
+        let result = match (&legacy_base_url, &repo) {
+            (Some(b), _) => publish::upload_to_release(out_dir, b),
+            (None, Some(r)) => publish::upload(out_dir, r, &set_version),
+            (None, None) => unreachable!("sin --base-url el repo siempre esta resuelto"),
+        };
+        match result {
             Ok(url) => println!("publicado: {url}"),
             Err(e) => {
                 eprintln!("[!] no se pudo subir automaticamente: {e:#}");
@@ -460,10 +468,19 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
             }
         }
     }
-    println!(
-        "\nPasale a tus amigos esta URL (pestaña Sync):\n  {}set-manifest.json",
-        base_url.trim_end_matches('/').to_string() + "/"
-    );
+    // OJO: con el modelo incremental el `base_url` apunta al release de ASSETS, pero el MANIFEST vive
+    // en el release de la VERSION. Para que el amigo no quede con una URL 404, recomendamos suscribirse
+    // por REPO (sigue el ultimo release) y mostramos la URL del manifest de ESTA version.
+    match (&legacy_base_url, &repo) {
+        (None, Some(r)) => println!(
+            "\nPasale a tus amigos el REPO (pestaña Sync -> Repositorio, sigue el ultimo release):\n  {r}\n  (o la URL de esta version: {}set-manifest.json)",
+            github::release_base_url(r, &set_version)
+        ),
+        _ => println!(
+            "\nPasale a tus amigos esta URL (pestaña Sync):\n  {}set-manifest.json",
+            base_url.trim_end_matches('/').to_string() + "/"
+        ),
+    }
     Ok(())
 }
 
