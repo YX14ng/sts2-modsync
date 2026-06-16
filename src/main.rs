@@ -916,36 +916,39 @@ fn run_nxm(link: &str) -> Result<String> {
         l.key.as_deref(),
         l.expires.as_deref(),
     )?;
-    let is_zip = url_extension(&url).is_some_and(|e| e == "zip");
-    // Nombre de temp FIJO (no interpolar nada de la URL en el path): la extension solo decide el flujo.
+    // Nombre de temp con la extension de la URL (para que `move_to_downloads` lo guarde con un nombre
+    // sensato si no es instalable). El FORMATO real (zip/7z) lo decide `archive_kind` por MAGIC.
     let tmp = std::env::temp_dir().join(format!(
         "sts2_nxm_{}.{}",
         nxm_suffix(),
-        if is_zip { "zip" } else { "bin" }
+        url_extension(&url).as_deref().unwrap_or("bin")
     ));
     println!("bajando...");
     if let Err(e) = transport::download_capped(&url, &tmp, NXM_DOWNLOAD_MAX) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
-    if is_zip {
-        let r = manager::install_from_zip(&install, &tmp, true);
-        let _ = std::fs::remove_file(&tmp);
-        let id = r.context("instalando el .zip de Nexus")?;
-        Ok(format!("instalado desde Nexus: {id}"))
-    } else {
-        // No extraemos .7z/.rar: PRESERVAR el archivo (a Descargas, o queda en temp) para instalar a mano.
-        match move_to_downloads(&tmp, &url) {
+    use manager::ArchiveKind;
+    match manager::archive_kind(&tmp) {
+        // .zip o .7z: instalar directo (reemplaza el mod del id que declare el archivo).
+        ArchiveKind::Zip | ArchiveKind::SevenZ => {
+            let r = manager::install_from_zip(&install, &tmp, true);
+            let _ = std::fs::remove_file(&tmp);
+            let id = r.context("instalando el archivo de Nexus")?;
+            Ok(format!("instalado desde Nexus: {id}"))
+        }
+        // .rar u otro: NO se extrae; preservar el archivo (a Descargas) para instalar a mano.
+        ArchiveKind::Other => match move_to_downloads(&tmp, &url) {
             Ok(dst) => Ok(format!(
-                "el archivo de Nexus no es .zip. Lo guarde en {}; extraelo e instala con 'Instalar \
-                 carpeta' o 'Instalar .zip' (pestaña Mods).",
+                "el archivo de Nexus no es .zip ni .7z. Lo guarde en {}; extraelo e instala con \
+                 'Instalar carpeta' o 'Instalar .zip' (pestaña Mods).",
                 dst.display()
             )),
             Err(_) => Ok(format!(
-                "el archivo de Nexus no es .zip y quedo en {}; extraelo e instala a mano (pestaña Mods).",
+                "el archivo de Nexus no es .zip ni .7z y quedo en {}; extraelo e instala a mano.",
                 tmp.display()
             )),
-        }
+        },
     }
 }
 

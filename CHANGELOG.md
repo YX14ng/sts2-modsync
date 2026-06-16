@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.16.0] - 2026-06-15 — instalar mods de Nexus en `.7z` (no solo `.zip`)
+
+- **Los mods de Nexus en `.7z` ahora se instalan directo** (antes se guardaban a Descargas para
+  extraer a mano). Aplica al handler `nxm://` y a la actualizacion directa de Premium. Nuevo:
+  `manager::archive_kind` detecta el formato por los bytes MAGIC (no por la extension, que el CDN de
+  Nexus a veces omite) y `manager::install_from_zip`/`install_update_zip` extraen `.zip` O `.7z` (via
+  `sevenz-rust`, pure-Rust) con la MISMA defensa anti path-traversal que el zip (valida cada entrada
+  por componentes). El `.rar` y otros formatos siguen yendo a Descargas (sin extraer).
+- Dep nueva: `sevenz-rust` (descompresor 7z pure-Rust, sin C).
+
 ## [1.15.0] - 2026-06-15 — compartir la lista de activados/desactivados por CODIGO
 
 - **Compartir tu lista de mods activados (y desactivados) con un codigo.** En la pestaña Perfiles, el

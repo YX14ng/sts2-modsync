@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.15.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.16.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -42,7 +42,8 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   `register`/`unregister`/`is_registered` (handler del protocolo en HKCU via `winreg`, solo Windows).
   `nexus::download_link` resuelve el CDN (con `key`/`expires` del link, o directo Premium). CLI
   `nxm <link>` (lo invoca Windows al tocar "Mod Manager Download"): baja con `transport::download_capped`
-  e instala el `.zip`; `.7z`/`.rar` se guardan a Descargas (no se extraen). Resultado en un dialogo (rfd).
+  e instala `.zip` o `.7z` (formato por MAGIC, `manager::archive_kind`); `.rar`/otros se guardan a
+  Descargas (no se extraen). Resultado en un dialogo (rfd).
   GUI: boton "Registrar Mod Manager Download (nxm://)".
 - **1.10.0:** **elegir/crear el repo de publicacion** y **actualizar mods de Nexus DIRECTO (Premium)**.
   GitHub: `github::Api::list_repos` (pagina `/user/repos`, filtra por permiso de push) + `create_repo`
@@ -54,11 +55,11 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   saber si sos Premium y muestra "Actualizar (Premium)"; las cuentas gratis siguen con `nxm://`. CLI:
   `mod-update <id>` ya actualiza mods de Nexus si la cuenta es Premium.
 
-Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): soporte `.7z` para
-los mods de Nexus, crear el repo de mods con un click, OAuth `OAUTH_CLIENT_ID` real, delta zstd, y
-confirmar en el flujo `nxm` antes de reemplazar si el id del `.zip` colisiona con OTRO mod instalado
-(hoy `install_from_zip(overwrite=true)` lo manda a la papelera sin preguntar; reversible, no rompe
-invariantes, pero el flujo lanzado por el protocolo no tiene prompt).
+Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): OAuth
+`OAUTH_CLIENT_ID` real, delta zstd, y confirmar en el flujo `nxm` antes de reemplazar si el id del
+archivo colisiona con OTRO mod instalado (hoy `install_from_zip(overwrite=true)` lo manda a la
+papelera sin preguntar; reversible, no rompe invariantes, pero el flujo lanzado por el protocolo no
+tiene prompt). (.7z de Nexus: HECHO en 1.16.0.)
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
@@ -96,7 +97,8 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
   vacia = modo dev (`DevUnverified`). CLI `sign <archivo>` / `keygen` siguen para quien quiera firmar.
 
 `eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
-`self-replace`/`flate2`/`base64` —estos dos para el codigo de `loadcode`—) es dep normal.
+`self-replace`/`flate2`/`base64` —estos dos para el codigo de `loadcode`—/`sevenz-rust` —extraer
+`.7z` de Nexus—) es dep normal.
 
 ## Arquitectura (modulos en `src/`)
 

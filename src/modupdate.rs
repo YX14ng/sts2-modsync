@@ -291,24 +291,24 @@ pub fn check_nexus(
 }
 
 /// Aplica una actualizacion DIRECTA de Nexus (solo Premium): resuelve el download-link del archivo
-/// MAIN (de vida corta, por eso se resuelve recien aca), baja el `.zip` e instala REEMPLAZANDO
-/// `mod_id` (solo si el zip declara ese MISMO id, via `manager::install_update_zip`), preservando
-/// enable/disable y recordando la version. Formatos no-`.zip` (`.7z`/`.rar`) no se auto-instalan: se
-/// avisa para bajarlos a mano. Exige el juego cerrado (lo verifica `manager`).
+/// MAIN (de vida corta, por eso se resuelve recien aca), baja el archivo e instala REEMPLAZANDO
+/// `mod_id` (solo si el archivo declara ese MISMO id, via `manager::install_update_zip`), preservando
+/// enable/disable y recordando la version. Soporta `.zip` y `.7z`; `.rar`/otros no se auto-instalan:
+/// se avisa para bajarlos a mano. Exige el juego cerrado (lo verifica `manager`).
 pub fn apply_nexus(install: &Install, mod_id: &str, nref: &NexusRef, version: &str) -> Result<()> {
     // Premium: download-link directo (sin key/expires de un solo uso).
     let url = crate::nexus::download_link(&nref.game, nref.mod_id, nref.file_id, None, None)?;
-    if !url_looks_zip(&url) {
+    if !url_looks_archive(&url) {
         bail!(
-            "el archivo de Nexus no es un .zip y no se puede auto-instalar. Bajalo desde la pagina \
-             del mod y usa 'Instalar .zip' (pestaña Mods)."
+            "el archivo de Nexus no es .zip ni .7z y no se puede auto-instalar. Bajalo desde la \
+             pagina del mod y usa 'Instalar .zip' (pestaña Mods)."
         );
     }
     // HTTPS lo exige `download_capped` (require_https + cliente https-only); no hace falta repetirlo.
     let was_disabled = manager::mod_dir(install, mod_id)
         .is_some_and(|d| d.starts_with(modlist::disabled_dir(install)));
 
-    let tmp = std::env::temp_dir().join(format!("sts2_nexusupd_{}.zip", unique_suffix()));
+    let tmp = std::env::temp_dir().join(format!("sts2_nexusupd_{}.bin", unique_suffix()));
     let res = (|| {
         transport::download_capped(&url, &tmp, DOWNLOAD_MAX)?;
         manager::install_update_zip(install, &tmp, mod_id)
@@ -327,16 +327,20 @@ pub fn apply_nexus(install: &Install, mod_id: &str, nref: &NexusRef, version: &s
     Ok(())
 }
 
-/// `true` si el ultimo segmento del path de `url` (sin query/fragment) termina en `.zip`.
-fn url_looks_zip(url: &str) -> bool {
-    url.split(['?', '#'])
+/// `true` si el ultimo segmento del path de `url` (sin query/fragment) termina en `.zip` o `.7z` (los
+/// formatos que se auto-instalan). Pre-filtro para no bajar un `.rar` que igual no se podria instalar;
+/// el formato REAL lo decide `manager::archive_kind` por MAGIC tras bajar.
+fn url_looks_archive(url: &str) -> bool {
+    let ext = url
+        .split(['?', '#'])
         .next()
         .unwrap_or(url)
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or("")
         .rsplit_once('.')
-        .is_some_and(|(_, e)| e.eq_ignore_ascii_case("zip"))
+        .map(|(_, e)| e.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("zip") | Some("7z"))
 }
 
 /// El origen efectivo de un mod: el override del usuario en `config.mod_sources` (prioridad) o el
@@ -389,14 +393,14 @@ mod tests {
     }
 
     #[test]
-    fn url_looks_zip_solo_por_la_extension_del_ultimo_segmento() {
-        assert!(url_looks_zip(
+    fn url_looks_archive_acepta_zip_y_7z() {
+        assert!(url_looks_archive(
             "https://cdn.nexus/files/Mod-1.2.zip?md5=x&expires=9"
         ));
-        assert!(url_looks_zip("https://cdn/a/b/Mod.ZIP")); // case-insensitive
-        assert!(!url_looks_zip("https://cdn/files/Mod-1.2.7z?md5=x"));
-        assert!(!url_looks_zip("https://cdn/files/Mod.rar"));
-        assert!(!url_looks_zip("https://cdn/zip/Mod")); // 'zip' en el path, no en la extension
+        assert!(url_looks_archive("https://cdn/a/b/Mod.ZIP")); // case-insensitive
+        assert!(url_looks_archive("https://cdn/files/Mod-1.2.7z?md5=x")); // .7z ahora si
+        assert!(!url_looks_archive("https://cdn/files/Mod.rar")); // .rar no
+        assert!(!url_looks_archive("https://cdn/zip/Mod")); // 'zip' en el path, no en la extension
     }
 
     #[test]

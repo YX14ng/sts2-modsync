@@ -117,12 +117,14 @@ pub fn install_from_dir(install: &Install, src: &Path, overwrite: bool) -> Resul
     Ok(id)
 }
 
-/// Instala un mod desde un `.zip` (busca dentro la carpeta con el `<id>.json`).
-pub fn install_from_zip(install: &Install, zip_path: &Path, overwrite: bool) -> Result<String> {
+/// Instala un mod desde un archivo `.zip` o `.7z` (busca dentro la carpeta con el `<id>.json`).
+/// El formato se detecta por MAGIC (`archive_kind`), no por la extension.
+pub fn install_from_zip(install: &Install, archive_path: &Path, overwrite: bool) -> Result<String> {
     ensure_game_closed()?;
-    let tmp = extract_zip_to_temp(zip_path)?;
+    let tmp = extract_archive_to_temp(archive_path)?;
     let res = (|| {
-        let mod_root = find_mod_root(&tmp).context("el .zip no contiene un mod con <id>.json")?;
+        let mod_root =
+            find_mod_root(&tmp).context("el archivo no contiene un mod con <id>.json")?;
         install_from_dir(install, &mod_root, overwrite)
     })();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -134,19 +136,19 @@ pub fn install_from_zip(install: &Install, zip_path: &Path, overwrite: bool) -> 
 /// instala lo controla el contenido del zip (el upstream), no el llamador, asi que sin esta guarda
 /// `install_from_zip(overwrite)` mandaria a la papelera el mod con el id del zip, sea cual sea. Para
 /// el auto-update de mods (`modupdate::apply`).
-pub fn install_update_zip(install: &Install, zip_path: &Path, expected_id: &str) -> Result<()> {
+pub fn install_update_zip(install: &Install, archive_path: &Path, expected_id: &str) -> Result<()> {
     ensure_game_closed()?;
-    let tmp = extract_zip_to_temp(zip_path)?;
+    let tmp = extract_archive_to_temp(archive_path)?;
     let res = (|| {
         let mod_root = find_mod_root(&tmp).context(
-            "el .zip del release no trae un mod empaquetado como carpeta con su <id>.json \
+            "el archivo del release no trae un mod empaquetado como carpeta con su <id>.json \
              (¿el release sube el .dll suelto? bajalo a mano e instala con 'Instalar .zip')",
         )?;
         let manifest = modlist::read_manifest(&mod_root)
-            .context("el mod del .zip no tiene <id>.json valido")?;
+            .context("el mod del archivo no tiene <id>.json valido")?;
         if manifest.id != expected_id {
             bail!(
-                "el .zip del release trae el mod {:?}, no {expected_id:?}: abortado para no pisar otro mod",
+                "el archivo del release trae el mod {:?}, no {expected_id:?}: abortado para no pisar otro mod",
                 manifest.id
             );
         }
@@ -297,6 +299,82 @@ fn extract_zip_to_temp(zip_path: &Path) -> Result<PathBuf> {
                 .with_context(|| format!("extrayendo {}", out.display()))?;
         }
     }
+    Ok(tmp)
+}
+
+/// Formato de un archivo de mod, detectado por sus bytes MAGIC (no por la extension, que puede
+/// mentir — el CDN de Nexus a veces sirve un `.7z` con una URL sin extension clara).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveKind {
+    Zip,
+    SevenZ,
+    Other,
+}
+
+/// Detecta el formato de `path` por los primeros bytes: ZIP (`PK\x03\x04`) o 7z
+/// (`37 7A BC AF 27 1C`). `Other` si no es ninguno (`.rar` u otro): no se auto-instala.
+pub fn archive_kind(path: &Path) -> ArchiveKind {
+    use std::io::Read;
+    let mut buf = [0u8; 6];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return ArchiveKind::Other;
+    };
+    let n = f.read(&mut buf).unwrap_or(0);
+    if n >= 4 && &buf[..4] == b"PK\x03\x04" {
+        ArchiveKind::Zip
+    } else if n >= 6 && buf == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
+        ArchiveKind::SevenZ
+    } else {
+        ArchiveKind::Other
+    }
+}
+
+/// Extrae un archivo (.zip o .7z) a un dir temporal, eligiendo por MAGIC. `.rar`/otros: error claro.
+fn extract_archive_to_temp(path: &Path) -> Result<PathBuf> {
+    match archive_kind(path) {
+        ArchiveKind::Zip => extract_zip_to_temp(path),
+        ArchiveKind::SevenZ => extract_7z_to_temp(path),
+        ArchiveKind::Other => bail!(
+            "formato de archivo no soportado (solo .zip y .7z): {}",
+            path.display()
+        ),
+    }
+}
+
+/// Extrae un `.7z` a un dir temporal, con la MISMA defensa anti path-traversal que el `.zip`:
+/// valida cada entrada por componentes (rechaza `..`/raiz/prefijo) antes de escribir.
+fn extract_7z_to_temp(path: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let tmp = unique_temp_dir("sts2_install_7z");
+    std::fs::create_dir_all(&tmp)?;
+    let mut reader = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())
+        .context("7z invalido o protegido con password")?;
+    let to_sz = |e: std::io::Error| sevenz_rust::Error::other(e.to_string());
+    reader
+        .for_each_entries(|entry, rd| {
+            let rel = PathBuf::from(entry.name().replace('\\', "/"));
+            if rel
+                .components()
+                .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+            {
+                return Err(sevenz_rust::Error::other(format!(
+                    "entrada 7z insegura (path-traversal): {:?}",
+                    entry.name()
+                )));
+            }
+            let out = tmp.join(&rel);
+            if entry.is_directory() {
+                std::fs::create_dir_all(&out).map_err(to_sz)?;
+            } else {
+                if let Some(parent) = out.parent() {
+                    std::fs::create_dir_all(parent).map_err(to_sz)?;
+                }
+                let mut f = std::fs::File::create(&out).map_err(to_sz)?;
+                std::io::copy(rd, &mut f).map_err(to_sz)?;
+            }
+            Ok(true)
+        })
+        .context("extrayendo el .7z")?;
     Ok(tmp)
 }
 
@@ -530,6 +608,44 @@ mod tests {
             zw.finish().unwrap();
         }
         let id = install_from_zip(&install, &zip_path, false).unwrap();
+        assert_eq!(id, "Mod");
+        assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn archive_kind_por_magic_y_7z_round_trip() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_7z");
+        // Deteccion por MAGIC (no por extension): un .zip se reconoce por PK, un .7z por su firma.
+        std::fs::write(install.root.join("a.zip"), b"PK\x03\x04xx").unwrap();
+        assert_eq!(archive_kind(&install.root.join("a.zip")), ArchiveKind::Zip);
+        std::fs::write(
+            install.root.join("a.7z"),
+            [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C],
+        )
+        .unwrap();
+        assert_eq!(
+            archive_kind(&install.root.join("a.7z")),
+            ArchiveKind::SevenZ
+        );
+        std::fs::write(install.root.join("a.rar"), b"Rar!\x1a\x07\x00").unwrap();
+        assert_eq!(
+            archive_kind(&install.root.join("a.rar")),
+            ArchiveKind::Other
+        );
+
+        // Round-trip real: armar un .7z con Mod/Mod.json y que `install_from_zip` lo instale.
+        let src = install.root.join("incoming");
+        std::fs::create_dir_all(src.join("Mod")).unwrap();
+        std::fs::write(src.join("Mod").join("Mod.json"), br#"{"id":"Mod"}"#).unwrap();
+        let sevenz = install.root.join("mod.7z");
+        sevenz_rust::compress_to_path(&src, &sevenz).unwrap();
+        assert_eq!(archive_kind(&sevenz), ArchiveKind::SevenZ);
+        let id = install_from_zip(&install, &sevenz, false).unwrap();
         assert_eq!(id, "Mod");
         assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
         let _ = std::fs::remove_dir_all(&install.root);
