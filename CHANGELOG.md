@@ -3,6 +3,21 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.26.0] - 2026-06-16 — avisar si el set NO es compatible con tu BaseLib / version del juego
+
+Otra causa invisible de "no podemos jugar juntos" / crashes, ahora detectada (item del analisis).
+
+- **El set ahora viaja con la version de BaseLib y de Slay the Spire 2 con la que se armo**, y al
+  sincronizar la app **COMPARA** contra lo que tenes y AVISA fuerte si difiere:
+  - *"El set se armo con BaseLib X pero tenes Y: el juego puede crashear (ReflectionTypeLoadException)
+    o desincronizar"* — un mismatch de BaseLib es un crash duro al arrancar.
+  - *"El set se armo para Slay the Spire 2 X y tu juego es Y"*.
+  Antes el campo `baselib_version` existia pero estaba MUERTO (nunca se seteaba al publicar ni se
+  comparaba al sincronizar — solo se mostraba "Requiere BaseLib X"). Ahora `publish` lo auto-completa
+  (de la version del propio BaseLib del set) y el nuevo `game_version` sale de la deteccion del juego.
+- Solo avisa para los pines que el set TRAE: los sets viejos (sin pines) no generan ningun ruido. Es
+  un AVISO, no bloquea la sync. Campos ADITIVOS y compatibles (apps/sets viejos siguen funcionando).
+
 ## [1.25.0] - 2026-06-16 — botones de login + robustez de red, config y logging
 
 Tanda salida de un analisis de estructura + utilidad (4 agentes, 13 items priorizados). Pulido +

@@ -321,7 +321,8 @@ impl App {
             set_name,
             set_version: version.clone(),
             published_at: String::new(),
-            baselib_version: None,
+            baselib_version: None, // lo auto-completa `prepare` con BaseLib del set
+            game_version: install.version.clone(), // pin de la version de StS2 (aviso de skew)
         };
         let upload_repo = repo.clone();
         let upload_version = version;

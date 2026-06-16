@@ -23,7 +23,11 @@ pub struct PublishParams {
     pub base_url: String,
     /// ISO-8601; si queda vacio se usa `set_version`.
     pub published_at: String,
+    /// Pin de BaseLib. `None` => `prepare` lo auto-completa con la version del mod BaseLib del set.
     pub baselib_version: Option<String>,
+    /// Version de Slay the Spire 2 con la que se arma el set (de `detect::Install.version`). El
+    /// cliente avisa si difiere. `None` => no se pinea (no se pudo detectar la version del juego).
+    pub game_version: Option<String>,
 }
 
 /// Un archivo a subir (asset), nombrado por su BLAKE3 (content-addressed).
@@ -119,6 +123,16 @@ pub fn prepare(
     } else {
         p.published_at.clone()
     };
+    // Auto-completar el pin de BaseLib con la version del mod BaseLib del SET (si el modder no lo fijo
+    // a mano): asi el set viaja con el pin y el amigo recibe el aviso de skew. `game_version` lo pasa
+    // el caller desde `Install.version`.
+    let baselib_version = p.baselib_version.clone().or_else(|| {
+        entries
+            .iter()
+            .find(|e| e.id == BASELIB_ID)
+            .map(|e| e.version.clone())
+            .filter(|v| v != "0") // si BaseLib no declara version (queda "0"), no pinear (evita ruido)
+    });
     let manifest = SetManifest {
         schema: crate::manifest::SCHEMA_VERSION,
         set_name: p.set_name.clone(),
@@ -127,7 +141,8 @@ pub fn prepare(
         signing_key_id: None,
         base_url: p.base_url.clone(),
         magnet: None,
-        baselib_version: p.baselib_version.clone(),
+        baselib_version,
+        game_version: p.game_version.clone(),
         mods: entries,
     };
     manifest
@@ -613,6 +628,7 @@ mod tests {
             base_url: "https://x/".into(),
             published_at: String::new(),
             baselib_version: None,
+            game_version: None,
         };
 
         let prep = prepare(&mods, &ids, &params).unwrap();
@@ -655,6 +671,7 @@ mod tests {
             base_url: "https://x/".into(),
             magnet: None,
             baselib_version: None,
+            game_version: None,
             mods: vec![ModEntry {
                 id: "Char".into(),
                 version: "1".into(),
@@ -690,6 +707,7 @@ mod tests {
             base_url: "https://x/".into(),
             published_at: String::new(),
             baselib_version: None,
+            game_version: None,
         };
         let mut prep = prepare(&mods, &ids, &params).unwrap();
 

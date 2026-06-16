@@ -66,8 +66,13 @@ pub struct SetManifest {
     pub magnet: Option<String>,
     /// Version de BaseLib con la que se compilaron estos mods (pin); el cliente
     /// avisa si el install tiene otra (ReflectionTypeLoadException si difieren).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baselib_version: Option<String>,
+    /// Version de Slay the Spire 2 contra la que el modder armo el set (de `detect::Install`).
+    /// ADITIVO (sets viejos = None). El cliente AVISA si su juego tiene otra (mods compilados
+    /// contra otra build pueden crashear o desincronizar el lobby). Solo aviso, no bloquea.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_version: Option<String>,
     /// Los mods del set, en cualquier orden (el orden de instalacion se calcula
     /// topologicamente con `install_order`).
     pub mods: Vec<ModEntry>,
@@ -241,6 +246,41 @@ impl SetManifest {
         self.managed_ids().contains(LOAD_ORDER_ENFORCER_ID)
     }
 
+    /// Avisos de COMPATIBILIDAD del set vs el install local (no fatal, pero importante): si el set se
+    /// armo contra otra version de BaseLib o de Slay the Spire 2, el juego puede crashear
+    /// (`ReflectionTypeLoadException`) o los amigos no entrar al mismo lobby. `local_baselib` = version
+    /// del mod BaseLib instalado (None = no esta); `local_game` = version del juego (`Install.version`).
+    /// Solo avisa para los pines que el set TRAE (sets viejos sin pin no generan ruido).
+    pub fn compatibility_warnings(
+        &self,
+        local_baselib: Option<&str>,
+        local_game: Option<&str>,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(set_bl) = self.baselib_version.as_deref() {
+            match local_baselib {
+                Some(local) if local != set_bl => out.push(format!(
+                    "El set se armo con BaseLib {set_bl} pero tenes {local}: el juego puede crashear \
+                     (ReflectionTypeLoadException) o desincronizar. Instala/actualiza BaseLib a {set_bl}."
+                )),
+                None => out.push(format!(
+                    "El set pide BaseLib {set_bl} pero no encontre BaseLib instalado (instalalo)."
+                )),
+                _ => {}
+            }
+        }
+        if let Some(set_gv) = self.game_version.as_deref()
+            && let Some(local) = local_game
+            && local != set_gv
+        {
+            out.push(format!(
+                "El set se armo para Slay the Spire 2 {set_gv} y tu juego es {local}: los mods pueden \
+                 fallar o no entrar al mismo lobby."
+            ));
+        }
+        out
+    }
+
     /// Orden de instalacion topologico (dependencias primero). Error si hay ciclo.
     pub fn install_order(&self) -> Result<Vec<String>> {
         let mut deps: BTreeMap<&str, &[String]> = BTreeMap::new();
@@ -316,8 +356,32 @@ mod tests {
             base_url: "https://x/".into(),
             magnet: None,
             baselib_version: None,
+            game_version: None,
             mods,
         }
+    }
+
+    #[test]
+    fn compatibility_warnings_avisa_skew_y_calla_sin_pines() {
+        let mut m = manifest(vec![]);
+        m.baselib_version = Some("2.0".into());
+        m.game_version = Some("1.5".into());
+        // Todo coincide -> sin avisos.
+        assert!(
+            m.compatibility_warnings(Some("2.0"), Some("1.5"))
+                .is_empty()
+        );
+        // BaseLib difiere / falta / version del juego difiere -> 1 aviso cada caso.
+        assert_eq!(m.compatibility_warnings(Some("1.9"), Some("1.5")).len(), 1);
+        assert_eq!(m.compatibility_warnings(None, Some("1.5")).len(), 1);
+        assert_eq!(m.compatibility_warnings(Some("2.0"), Some("1.4")).len(), 1);
+        // Los dos difieren -> 2 avisos.
+        assert_eq!(m.compatibility_warnings(Some("1.9"), Some("1.4")).len(), 2);
+        // Un set SIN pines (viejo) nunca avisa, aunque difiera todo.
+        let old = manifest(vec![]);
+        assert!(old.compatibility_warnings(Some("x"), Some("y")).is_empty());
+        // game_version desconocido localmente -> no se puede comparar, no avisa por eso.
+        assert_eq!(m.compatibility_warnings(Some("2.0"), None).len(), 0);
     }
 
     #[test]

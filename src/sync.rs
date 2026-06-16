@@ -712,6 +712,7 @@ mod tests {
             base_url: "https://example/".into(),
             magnet: None,
             baselib_version: None,
+            game_version: None,
             mods: vec![ModEntry {
                 id: mod_id.into(),
                 version: "1".into(),
@@ -791,6 +792,7 @@ mod tests {
             base_url: "https://example/".into(),
             magnet: None,
             baselib_version: None,
+            game_version: None,
             mods: vec![ModEntry {
                 id: "Mod".into(),
                 version: "2".into(),

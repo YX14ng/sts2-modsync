@@ -479,6 +479,7 @@ mod tests {
             base_url: "https://invalid.invalid/".into(), // si cae a HTTP, falla a proposito
             magnet: Some(magnet),
             baselib_version: None,
+            game_version: None,
             mods: vec![ModEntry {
                 id: "Mod".into(),
                 version: "1".into(),

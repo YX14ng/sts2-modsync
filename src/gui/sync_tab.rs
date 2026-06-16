@@ -317,8 +317,17 @@ impl App {
                 }
                 None => {}
             }
-            if let Some(bl) = &m.baselib_version {
-                ui.colored_label(WARN, format!("Requiere BaseLib {bl}."));
+            // Avisos de COMPATIBILIDAD: comparar los pines del set (BaseLib / version de StS2) contra
+            // lo instalado. Antes solo mostraba "Requiere BaseLib X" pasivo; ahora avisa FUERTE si
+            // difiere (skew = crash o desincronizacion del lobby).
+            let local_bl = self
+                .mods
+                .iter()
+                .find(|x| x.id() == crate::manifest::BASELIB_ID)
+                .and_then(|x| x.manifest.version.as_deref());
+            let local_game = self.install.as_ref().and_then(|i| i.version.as_deref());
+            for w in m.compatibility_warnings(local_bl, local_game) {
+                ui.colored_label(BAD, format!("⚠ {w}"));
             }
         }
         ui.separator();

@@ -429,8 +429,15 @@ fn cmd_sync(install: &detect::Install, src: &str) -> Result<()> {
         }
         signing::SigStatus::DevUnverified => println!("  firma: NO verificada (modo dev)"),
     }
-    if let Some(bl) = &manifest.baselib_version {
-        println!("  BaseLib esperada: {bl}");
+    // Avisos de COMPATIBILIDAD (BaseLib / version de StS2) del set vs lo instalado: un set armado
+    // contra otra build puede crashear o desincronizar el lobby. Best-effort.
+    let local_mods = modlist::scan(install).unwrap_or_default();
+    let local_bl = local_mods
+        .iter()
+        .find(|m| m.id() == sts2_modsync::manifest::BASELIB_ID)
+        .and_then(|m| m.manifest.version.as_deref());
+    for w in manifest.compatibility_warnings(local_bl, install.version.as_deref()) {
+        println!("  [!] {w}");
     }
     let plan = sync::plan(&manifest, &install.mods_dir)?;
     print_plan(&plan);
@@ -509,7 +516,8 @@ fn cmd_publish(install: &detect::Install, args: &[String]) -> Result<()> {
         set_version: set_version.clone(),
         base_url: base_url.to_string(),
         published_at: String::new(),
-        baselib_version: None,
+        baselib_version: None, // lo auto-completa `prepare` con la version del BaseLib del set
+        game_version: install.version.clone(), // pin de la version de StS2 (aviso de skew al sync)
     };
     let mut prep = publish::prepare(&mods, &ids, &params)?;
     let out_dir = Path::new(out);
