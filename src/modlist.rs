@@ -200,6 +200,71 @@ pub fn conflicts(mods: &[InstalledMod]) -> Vec<String> {
     dup.into_iter().collect()
 }
 
+/// Un grupo de mods DUPLICADOS: el MISMO id instalado en mas de una carpeta. `keep` es el que se
+/// conserva y `remove` los demas (a mandar a la papelera). El que se conserva es la version MAS
+/// NUEVA (asi "si hay 2 versiones del mismo mod, se borra la vieja").
+#[derive(Debug, Clone)]
+pub struct DuplicateGroup {
+    pub id: String,
+    pub keep: InstalledMod,
+    pub remove: Vec<InstalledMod>,
+}
+
+/// Detecta ids instalados en MAS DE UNA carpeta (duplicado/conflicto) y, por grupo, decide cual
+/// conservar y cuales borrar. Vacio si no hay duplicados. Se conserva el de mayor `version`
+/// (`update::parse_ver`); en empate, el habilitado y luego el de carpeta modificada mas
+/// recientemente. Cada grupo tiene >=1 mod en `remove`.
+pub fn duplicates(mods: &[InstalledMod]) -> Vec<DuplicateGroup> {
+    use std::collections::BTreeMap;
+    let mut by_id: BTreeMap<&str, Vec<&InstalledMod>> = BTreeMap::new();
+    for m in mods {
+        by_id.entry(m.id()).or_default().push(m);
+    }
+    let mut out = Vec::new();
+    for (id, mut members) in by_id {
+        if members.len() < 2 {
+            continue;
+        }
+        // De "mejor a conservar" a "peor" (descendente): version, habilitado, mtime.
+        members.sort_by_key(|m| std::cmp::Reverse(keep_rank(m)));
+        let keep = members[0].clone();
+        let remove = members[1..].iter().map(|&m| m.clone()).collect();
+        out.push(DuplicateGroup {
+            id: id.to_string(),
+            keep,
+            remove,
+        });
+    }
+    out
+}
+
+/// Clave de "que tan bueno es conservar este mod" (mas alto = se conserva): (version, NO-prerelease,
+/// habilitado, mtime de la carpeta). La version manda; un release (`1.2.0`) gana a un pre-release del
+/// MISMO X.Y.Z (`1.2.0-beta`); el resto rompe empates entre copias de la misma version.
+fn keep_rank(m: &InstalledMod) -> ((u64, u64, u64), bool, bool, u64) {
+    let v = m.manifest.version.as_deref().unwrap_or("");
+    let ver = crate::update::parse_ver(v);
+    let is_release = !is_prerelease(v); // 1.2.0 > 1.2.0-beta para el mismo X.Y.Z
+    let mtime = std::fs::metadata(&m.dir)
+        .and_then(|md| md.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (ver, is_release, m.enabled, mtime)
+}
+
+/// `true` si la version es un PRE-RELEASE (sufijo `-...`, ej "1.2.0-beta"). El build-metadata
+/// (`+...`) NO cuenta. Solo afecta empates de `parse_ver` (mismo X.Y.Z).
+fn is_prerelease(v: &str) -> bool {
+    v.trim()
+        .trim_start_matches('v')
+        .split('+')
+        .next()
+        .unwrap_or("")
+        .contains('-')
+}
+
 /// Orden de carga canonico (BaseLib + A-Z) sobre los mods HABILITADOS — lo que alimenta
 /// el room-hash de multiplayer (reusa `manifest::canonical_order`).
 pub fn load_order(mods: &[InstalledMod]) -> Vec<String> {
@@ -282,6 +347,36 @@ mod tests {
         assert!(load_order_enforced(&mods));
         let sin = vec![im("BaseLib", true, &[])];
         assert!(!load_order_enforced(&sin));
+    }
+
+    #[test]
+    fn duplicates_conserva_la_version_mas_nueva() {
+        // Mismo id en dos carpetas distintas, distinta version: se conserva la nueva, se borra la vieja.
+        let mut viejo = im("FGOCore", true, &[]);
+        viejo.manifest.version = Some("1.0.0".into());
+        viejo.dir = PathBuf::from("mods/FGOCore");
+        let mut nuevo = im("FGOCore", false, &[]);
+        nuevo.manifest.version = Some("1.2.0".into());
+        nuevo.dir = PathBuf::from("mods/FGOCore-1.2");
+        let mods = vec![viejo, nuevo, im("Solo", true, &[])];
+
+        let dups = duplicates(&mods);
+        assert_eq!(dups.len(), 1, "solo FGOCore esta duplicado");
+        let g = &dups[0];
+        assert_eq!(g.id, "FGOCore");
+        assert_eq!(
+            g.keep.manifest.version.as_deref(),
+            Some("1.2.0"),
+            "conserva la version mas nueva"
+        );
+        assert_eq!(g.remove.len(), 1);
+        assert_eq!(
+            g.remove[0].manifest.version.as_deref(),
+            Some("1.0.0"),
+            "borra la vieja"
+        );
+        // Sin duplicados -> vacio.
+        assert!(duplicates(&[im("A", true, &[]), im("B", false, &[])]).is_empty());
     }
 
     #[test]

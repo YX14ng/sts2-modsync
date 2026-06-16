@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.14.0] - 2026-06-15 — limpiar mods duplicados (deja la version mas nueva)
+
+- **Quitar mods duplicados de una.** Cuando el mismo `id` esta instalado en mas de una carpeta
+  (conflicto que el juego marca), aparece en la pestaña Mods un boton **"Quitar N duplicado(s) — deja
+  la version mas nueva (papelera)"**: por cada id conserva la version mas alta y manda las otras a la
+  papelera (reversible). CLI: `dedupe`. Nuevo: `modlist::duplicates` (elige el que se conserva por
+  version; empate -> release antes que pre-release, luego habilitado, luego mtime) y
+  `manager::trash_mod_dir` (borra una carpeta ESPECIFICA, validando que sea hija directa de `mods/` o
+  `mods_disabled/` y que el ultimo componente no sea `..` — nunca toca nada afuera; exige el juego
+  cerrado).
+- Borra por PATH (no por id) porque las carpetas duplicadas suelen tener nombres distintos del id
+  (`mods/FGOCore` y `mods/FGOCore-1.2`, ambos id `FGOCore`). Siempre conserva al menos una copia.
+
 ## [1.13.0] - 2026-06-15 — fix: "Steam初始化失败 / No appID found" al lanzar + opcion "Jugar por Steam"
 
 - **Lanzar el build de Steam ya no falla con "No appID found".** El juego llama a `SteamAPI_Init`, que

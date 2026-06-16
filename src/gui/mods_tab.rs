@@ -114,6 +114,23 @@ impl App {
                 BAD,
                 format!("Conflictos (ids duplicados): {}", conflicts.join(", ")),
             );
+            // Limpiar de una: por cada id duplicado deja la version MAS NUEVA y manda las otras a la
+            // papelera (reversible). Calculado aca; `dedupe_mods` lo recomputa al ejecutar.
+            let n_dup: usize = modlist::duplicates(&self.mods)
+                .iter()
+                .map(|g| g.remove.len())
+                .sum();
+            if n_dup > 0 {
+                let can = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
+                let label =
+                    format!("Quitar {n_dup} duplicado(s) — deja la version mas nueva (papelera)");
+                if ui.add_enabled(can, egui::Button::new(label)).clicked() {
+                    self.dedupe_mods(ctx);
+                }
+                if self.game_running {
+                    ui.colored_label(WARN, "Cerra Slay the Spire 2 para limpiar duplicados.");
+                }
+            }
         }
         // En acento (azul) para que se note: es una linea de info larga que conviene distinguir.
         ui.colored_label(
@@ -537,6 +554,41 @@ impl App {
             Ok(format!("desinstalado (papelera): {id}"))
         });
         self.selected = None;
+    }
+
+    /// Limpia los mods DUPLICADOS (mismo id en >1 carpeta): por cada grupo conserva la version mas
+    /// nueva y manda las demas a la papelera (reversible). Re-escanea al terminar.
+    fn dedupe_mods(&mut self, ctx: &egui::Context) {
+        let Some(install) = self.install.clone() else {
+            return;
+        };
+        let groups = modlist::duplicates(&self.mods);
+        if groups.is_empty() {
+            return;
+        }
+        self.run_action(ctx, "quitando duplicados...".into(), move || {
+            // Continuar ante un fallo (carpeta ya borrada afuera, etc.): un item trabado no debe
+            // bloquear limpiar el resto. Cada `trash_mod_dir` re-chequea juego-cerrado + ubicacion.
+            let mut removed = 0usize;
+            let mut failed = 0usize;
+            for g in &groups {
+                for m in &g.remove {
+                    match manager::trash_mod_dir(&install, &m.dir) {
+                        Ok(()) => removed += 1,
+                        Err(_) => failed += 1,
+                    }
+                }
+            }
+            if failed > 0 {
+                Ok(format!(
+                    "quitados {removed} duplicado(s) a la papelera; {failed} no se pudieron (reintenta)"
+                ))
+            } else {
+                Ok(format!(
+                    "quitados {removed} duplicado(s) a la papelera (se conservo la version mas nueva)"
+                ))
+            }
+        });
     }
 
     fn toggle_mod(&mut self, ctx: &egui::Context, id: &str) {

@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.13.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.14.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -102,8 +102,11 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
 
 - **Core:** `detect` (Steam/pirata + juego-abierto) · `config` (%APPDATA%).
 - **Mod manager:** `modlist` (escanea `mods/`+`mods_disabled/`, parsea `<id>.json`, deps/conflictos,
-  orden de carga; `ModManifest.source_hint()` lee el upstream del mod) · `manager` (enable/disable/
-  install/uninstall = **MOVER carpetas**, juego cerrado) · `profile` (perfiles = conjuntos habilitados)
+  orden de carga; `ModManifest.source_hint()` lee el upstream del mod; `duplicates()` = grupos de
+  mismo id en >1 carpeta, eligiendo conservar la version mas nueva) · `manager` (enable/disable/
+  install/uninstall = **MOVER carpetas**, juego cerrado; `trash_mod_dir(dir)` borra una carpeta
+  ESPECIFICA —para limpiar duplicados— validando que sea hija directa de `mods/`/`mods_disabled/` y
+  que el ultimo componente no sea `..`) · `profile` (perfiles = conjuntos habilitados)
   · `launch` (abrir el juego; build de Steam: `launch_via_steam` = por `steam://rungameid/<appid>`
   con overlay [default], o directo dejando `steam_appid.txt` para que `SteamAPI_Init` no de "No appID
   found"; pirata sin Steamworks va directo) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·

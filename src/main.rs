@@ -97,6 +97,7 @@ fn main() -> Result<()> {
             println!("lanzando Slay the Spire 2...");
         }
         "publish" => cmd_publish(&install, &args)?,
+        "dedupe" => cmd_dedupe(&install)?,
         "mod-source" => cmd_mod_source(&args)?,
         "mod-check" => cmd_mod_check(&install, &args)?,
         "mod-update" => cmd_mod_update(&install, &args)?,
@@ -110,7 +111,7 @@ fn main() -> Result<()> {
         }
         other => {
             bail!(
-                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|seed|help)"
+                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|dedupe|seed|help)"
             )
         }
     }
@@ -194,6 +195,41 @@ fn cmd_list(install: &detect::Install) -> Result<()> {
             "[!] ModListSorter no esta habilitado: el orden de carga puede divergir entre\n    amigos y romper el lobby (room-hash de BaseLib)."
         );
     }
+    Ok(())
+}
+
+/// `dedupe`: limpia mods DUPLICADOS (mismo id en >1 carpeta) — conserva la version mas nueva y manda
+/// las otras a la papelera (reversible). Imprime lo que hace.
+fn cmd_dedupe(install: &detect::Install) -> Result<()> {
+    let mods = modlist::scan(install)?;
+    let groups = modlist::duplicates(&mods);
+    if groups.is_empty() {
+        println!("no hay mods duplicados.");
+        return Ok(());
+    }
+    let mut removed = 0usize;
+    for g in &groups {
+        println!(
+            "{}: conservo v{} ({})",
+            g.id,
+            g.keep.manifest.version.as_deref().unwrap_or("?"),
+            g.keep.dir.display(),
+        );
+        for m in &g.remove {
+            match manager::trash_mod_dir(install, &m.dir) {
+                Ok(()) => {
+                    println!(
+                        "  - papelera: {} (v{})",
+                        m.dir.display(),
+                        m.manifest.version.as_deref().unwrap_or("?")
+                    );
+                    removed += 1;
+                }
+                Err(e) => eprintln!("  [!] {}: {e:#}", m.dir.display()),
+            }
+        }
+    }
+    println!("listo: {removed} duplicado(s) a la papelera.");
     Ok(())
 }
 
@@ -1043,7 +1079,10 @@ fn print_help() {
     println!("  list                  lista los mods instalados (default)");
     println!("  enable  <id>          habilita un mod (mueve la carpeta a mods/)");
     println!("  disable <id>          deshabilita un mod (a mods_disabled/)");
-    println!("  launch                lanza el juego");
+    println!("  launch [--direct]     lanza el juego (por Steam; --direct abre el exe sin Steam)");
+    println!(
+        "  dedupe                limpia mods duplicados (deja la version mas nueva, resto a papelera)"
+    );
     println!(
         "  sync <set.json|url|owner/repo>  dry-run del plan; con owner/repo sigue el ultimo release"
     );

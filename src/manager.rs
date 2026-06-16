@@ -72,6 +72,38 @@ pub fn uninstall(install: &Install, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Manda a la papelera una CARPETA de mod ESPECIFICA (por path). A diferencia de `uninstall` (por
+/// id), esto borra la carpeta exacta — necesario para limpiar DUPLICADOS, donde el mismo id vive en
+/// varias carpetas con nombres distintos. SEGURO: exige el juego cerrado y que `dir` sea hija DIRECTA
+/// de `mods/` o `mods_disabled/` (nunca toca nada afuera del area gestionada).
+pub fn trash_mod_dir(install: &Install, dir: &Path) -> Result<()> {
+    ensure_game_closed()?;
+    let parent = dir.parent();
+    let in_managed = parent == Some(install.mods_dir.as_path())
+        || parent == Some(disabled_dir(install).as_path());
+    if !in_managed {
+        bail!(
+            "no se borra {}: no es una carpeta de mod dentro de mods/ ni mods_disabled/",
+            dir.display()
+        );
+    }
+    // El parent-check es LEXICO: `mods/..` tendria parent `mods` y pasaria, pero resuelve a la RAIZ
+    // del juego. Exigir que el ultimo componente sea un nombre de carpeta SIMPLE (rechaza `..`/`.`/
+    // separadores) cierra ese hueco — la misma red que `safe_id` para los borrados por id.
+    let name = dir
+        .file_name()
+        .context("ruta de mod sin nombre de carpeta (¿termina en '..'?)")?;
+    if !crate::manifest::is_simple_segment(&name.to_string_lossy()) {
+        bail!("nombre de carpeta de mod invalido: {}", dir.display());
+    }
+    if !dir.is_dir() {
+        bail!("no existe la carpeta {}", dir.display());
+    }
+    trash::delete(dir)
+        .with_context(|| format!("no se pudo mandar {} a la papelera", dir.display()))?;
+    Ok(())
+}
+
 /// Instala un mod desde una carpeta suelta (que contiene su `<id>.json`). Devuelve el id.
 /// Si ya hay un mod con ese id y `!overwrite`, falla.
 pub fn install_from_dir(install: &Install, src: &Path, overwrite: bool) -> Result<String> {
@@ -309,6 +341,33 @@ mod tests {
 
         // disable de algo que no esta habilitado -> error.
         assert!(disable(&install, "NoExiste").is_err());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn trash_mod_dir_solo_borra_dentro_del_area_gestionada() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_trashguard");
+        // Una carpeta FUERA de mods/ (en la raiz del install) NO se debe poder borrar.
+        let outside = install.root.join("noborrar");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(trash_mod_dir(&install, &outside).is_err());
+        assert!(outside.is_dir(), "no debe tocar una carpeta fuera de mods/");
+
+        // `mods/..` pasa el parent-check LEXICO pero resuelve a la raiz: el chequeo del ultimo
+        // componente (`..` no es un nombre simple) lo rechaza.
+        assert!(trash_mod_dir(&install, &install.mods_dir.join("..")).is_err());
+        assert!(trash_mod_dir(&install, &disabled_dir(&install).join("..")).is_err());
+        assert!(install.root.is_dir(), "JAMAS debe borrar la raiz del juego");
+        // Una carpeta de mod (hija directa de mods/) si es candidata valida (la validacion pasa).
+        make_mod(&install.mods_dir, "Dup");
+        let dup = install.mods_dir.join("Dup");
+        // No la mandamos a la papelera de verdad en el test; basta con que la validacion la acepte:
+        // su parent ES mods_dir, asi que el guard NO rechaza por ubicacion (un dir inexistente si).
+        assert_eq!(dup.parent(), Some(install.mods_dir.as_path()));
         let _ = std::fs::remove_dir_all(&install.root);
     }
 
