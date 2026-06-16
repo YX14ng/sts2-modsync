@@ -3,14 +3,17 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
-## [1.12.1] - 2026-06-15 — fix: "Steam初始化失败 / No appID found" al lanzar el build de Steam
+## [1.13.0] - 2026-06-15 — fix: "Steam初始化失败 / No appID found" al lanzar + opcion "Jugar por Steam"
 
 - **Lanzar el build de Steam ya no falla con "No appID found".** El juego llama a `SteamAPI_Init`, que
-  falla cuando el `.exe` se corre DIRECTO (no desde el cliente de Steam). Ahora, antes de lanzar, si la
-  carpeta tiene la dll de Steamworks (`steam_api64.dll`/`steam_api.dll`) se deja un `steam_appid.txt`
-  con el appID (`2868840`): SteamAPI inicializa contra el Steam que ya esta corriendo, sin cambiar el
-  flujo (se sigue abriendo el exe, con los mods). Las copias pirata "limpias" (sin esa dll) no se tocan.
-  Es idempotente (no reescribe si ya esta) y best-effort (si no se puede escribir, igual lanza).
+  falla cuando el `.exe` se corre DIRECTO (no desde el cliente de Steam). Dos modos (toggle en la barra
+  lateral, solo para builds de Steam):
+  - **Jugar por Steam (default):** lanza con `steam://rungameid/2868840`, asi Steam abre el juego con
+    integracion COMPLETA — overlay, horas, invitaciones. Es el modo recomendado.
+  - **Directo:** abre el exe dejando antes un `steam_appid.txt` con el appID (`2868840`) para que
+    SteamAPI inicialice contra el Steam que ya corre (sin overlay, pero anda). Idempotente y best-effort.
+- Las copias pirata "limpias" (sin la dll de Steamworks) no usan SteamAPI: siempre van directo y no se
+  tocan. CLI: `launch` va por Steam salvo `--direct` (o `launch_via_steam=false` en la config).
 
 ## [1.12.0] - 2026-06-15 — publicar incremental (solo lo que cambio) + version automatica
 

@@ -91,7 +91,9 @@ fn main() -> Result<()> {
             println!("deshabilitado: {id}");
         }
         "launch" => {
-            launch::launch(&install)?;
+            // Por Steam (overlay) salvo `--direct` o que la config lo tenga apagado.
+            let via_steam = cfg.launch_via_steam && !args.iter().any(|a| a == "--direct");
+            launch::launch(&install, via_steam)?;
             println!("lanzando Slay the Spire 2...");
         }
         "publish" => cmd_publish(&install, &args)?,

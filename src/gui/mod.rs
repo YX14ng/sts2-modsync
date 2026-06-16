@@ -574,7 +574,8 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has = self.install.is_some();
                 if ui.add_enabled(has, egui::Button::new("▶ Jugar")).clicked() {
-                    let r = self.install.as_ref().map(launch::launch);
+                    let via_steam = self.cfg.launch_via_steam;
+                    let r = self.install.as_ref().map(|i| launch::launch(i, via_steam));
                     if let Some(r) = r {
                         match r {
                             Ok(()) => self.show_toast("lanzando el juego...", false),
@@ -654,6 +655,22 @@ impl App {
             if ui.button(txt).clicked() {
                 self.dark_mode = !self.dark_mode;
                 apply_theme(ctx, self.dark_mode);
+            }
+            // Solo para builds de Steam: elegir lanzar POR Steam (overlay) o directo. La copia pirata
+            // no usa SteamAPI, asi que el toggle no aplica (no se muestra).
+            if self
+                .install
+                .as_ref()
+                .is_some_and(|i| crate::launch::is_steam_build(&i.root))
+                && ui
+                    .checkbox(&mut self.cfg.launch_via_steam, "Jugar por Steam")
+                    .on_hover_text(
+                        "Lanzar POR Steam (steam://): overlay, horas e invitaciones. Sin tildar: abre \
+                         el exe directo (deja steam_appid.txt para que Steam inicialice).",
+                    )
+                    .changed()
+            {
+                let _ = config::save(&self.cfg);
             }
         });
     }

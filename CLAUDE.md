@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.12.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.13.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -104,7 +104,9 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
 - **Mod manager:** `modlist` (escanea `mods/`+`mods_disabled/`, parsea `<id>.json`, deps/conflictos,
   orden de carga; `ModManifest.source_hint()` lee el upstream del mod) · `manager` (enable/disable/
   install/uninstall = **MOVER carpetas**, juego cerrado) · `profile` (perfiles = conjuntos habilitados)
-  · `launch` (abrir el juego) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
+  · `launch` (abrir el juego; build de Steam: `launch_via_steam` = por `steam://rungameid/<appid>`
+  con overlay [default], o directo dejando `steam_appid.txt` para que `SteamAPI_Init` no de "No appID
+  found"; pirata sin Steamworks va directo) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
   `modupdate` (auto-update de un mod desde su upstream: `check_github`/`check_nexus` + `apply`
   baja+instala) · `nexus` (API v1 de Nexus: API key en el llavero + `validate` + `check` + `download_link`)
   · `nxm` (handler del protocolo `nxm://`: parse + registro en HKCU, solo Windows).

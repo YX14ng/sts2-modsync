@@ -48,10 +48,19 @@ pub struct Config {
     /// la MISMA version a un mod que no declara `version` en su `<id>.json` (sino seria un loop).
     #[serde(default)]
     pub mod_installed_tag: HashMap<String, String>,
+    /// Lanzar el build de Steam POR Steam (`steam://rungameid/<appid>`): overlay, horas e
+    /// invitaciones. `false` = abrir el exe directo (deja `steam_appid.txt` para que SteamAPI
+    /// inicialice). Solo aplica a builds de Steam; las copias pirata siempre van directo. Default ON.
+    #[serde(default = "default_true")]
+    pub launch_via_steam: bool,
 }
 
 fn default_schema() -> u32 {
     CONFIG_SCHEMA
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -66,6 +75,7 @@ impl Default for Config {
             mod_sources: HashMap::new(),
             prefer_beta: false,
             mod_installed_tag: HashMap::new(),
+            launch_via_steam: true,
         }
     }
 }
@@ -223,6 +233,7 @@ mod tests {
             mod_sources,
             prefer_beta: true,
             mod_installed_tag: HashMap::new(),
+            launch_via_steam: false,
         };
         let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
         assert_eq!(back.install_root, cfg.install_root);
@@ -232,7 +243,15 @@ mod tests {
         assert_eq!(back.publish_set_name, cfg.publish_set_name);
         assert_eq!(back.mod_sources, cfg.mod_sources);
         assert_eq!(back.prefer_beta, cfg.prefer_beta);
+        assert_eq!(back.launch_via_steam, cfg.launch_via_steam);
         assert_eq!(back.schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn launch_via_steam_default_true_en_config_vieja() {
+        // Una config sin el campo (anterior a 1.13.0) debe quedar con launch_via_steam = true.
+        let cfg: Config = toml::from_str("install_root = '/tmp/StS2'\n").unwrap();
+        assert!(cfg.launch_via_steam);
     }
 
     #[test]
