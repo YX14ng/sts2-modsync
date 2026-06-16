@@ -74,6 +74,13 @@ pub(super) fn toast_hint(msg: &str) -> &'static str {
         "Cerra Slay the Spire 2 y reintenta (lockea sus archivos mientras corre)."
     } else if m.contains("espacio") {
         "Libera espacio en disco y reintenta."
+    } else if m.contains("denegad")
+        || m.contains("permis")
+        || m.contains("os error 5")
+        || m.contains("access is denied")
+    {
+        "Permiso denegado: cerra el juego; si sigue, la carpeta del juego no es escribible \
+         (probá mover la libreria de Steam, o excluila del \"Controlled Folder Access\" de Defender)."
     } else if m.contains("firma") {
         "El set no esta firmado por el publicador de confianza; no lo instales si no sabes su origen."
     } else if m.contains("cancel") {

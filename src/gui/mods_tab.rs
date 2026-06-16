@@ -571,10 +571,25 @@ impl App {
                     // Sin API key: pegar para conectar y poder chequear versiones de Nexus.
                     ui.label(
                         egui::RichText::new(
-                            "Conecta tu API Key de Nexus para chequear versiones (Preferences -> API en tu cuenta):",
+                            "Conecta tu API Key de Nexus para chequear versiones. Sacala de tu cuenta \
+                             (Preferences -> API Keys); el boton de abajo abre esa pagina:",
                         )
                         .weak(),
                     );
+                    // Boton que ABRE EL NAVEGADOR en la pagina de API Keys de Nexus (antes solo decia
+                    // "Preferences -> API" como texto y habia que buscarla a mano).
+                    if ui
+                        .button("Abrir Nexus para sacar mi API Key")
+                        .on_hover_text(
+                            "Abre la pagina de API Keys de tu cuenta de Nexus en el navegador. Logueate, \
+                             genera/copia tu \"Personal API Key\" y pegala abajo.",
+                        )
+                        .clicked()
+                    {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(
+                            "https://www.nexusmods.com/users/myaccount?tab=api",
+                        ));
+                    }
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.nexus_key_input)

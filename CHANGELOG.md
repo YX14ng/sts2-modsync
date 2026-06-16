@@ -3,6 +3,28 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.25.0] - 2026-06-16 — botones de login + robustez de red, config y logging
+
+Tanda salida de un analisis de estructura + utilidad (4 agentes, 13 items priorizados). Pulido +
+robustez; sin features nuevos grandes.
+
+- **Botones para abrir el navegador y loguearse** (lo que faltaba): Nexus tiene un **"Abrir Nexus para
+  sacar mi API Key"** (antes era solo texto "Preferences -> API") y GitHub un **"Abrir GitHub para crear
+  el token"** (scope `public_repo` ya marcado). El OAuth device-flow (login real por navegador, sin pegar
+  token) ahora ABRE el navegador solo cuando llega el codigo — sigue pidiendo un `OAUTH_CLIENT_ID`
+  compilado (registrar una OAuth App) para aparecer.
+- **Guardado de config ATOMICO**: escribe a un `.tmp` y renombra. Antes un corte a mitad podia dejar el
+  `config.toml` vacio y borrar TODA tu config (carpeta del juego, suscripciones, etc.).
+- **Robustez de red**: `connect_timeout` en todos los clientes (un host que no responde ya no cuelga la
+  app para siempre) + timeout total en los GET chicos (manifest/JSON). El auto-update del binario ahora
+  baja por el cliente con redirect HTTPS-only (un 30x que degrade a `http://` se rechaza — se ejecuta ese
+  binario). Logueado en GitHub, los chequeos de sets/mods usan tu token (5000/h en vez de 60/h) y un solo
+  decodificador del rate-limit avisa parejo "logueate para 5000/h".
+- **Logging en modo CLI** (antes solo el GUI): especialmente el handler `nxm://`, que Windows lanza SIN
+  consola — un fallo ahora deja rastro. Y el log usa **fecha/hora legible** (`2026-06-16 22:13:20Z`) en vez
+  de epoch crudo.
+- Hint de error nuevo para "permiso denegado" (cerra el juego / carpeta no escribible / Defender).
+
 ## [1.24.0] - 2026-06-16 — VERIFICAR el match de multiplayer (huella + comparar con un amigo)
 
 El producto existe para que vos y tus amigos entren al MISMO lobby (el juego saca un "room-hash"

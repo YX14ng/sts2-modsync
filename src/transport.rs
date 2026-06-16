@@ -141,6 +141,10 @@ impl ModSource for GitHubReleases {
 /// Cliente HTTP blocking con el User-Agent de la app. Punto unico para construir el cliente que
 /// usan los chequeos/descargas. La redirect-policy EXIGE https en CADA hop (rechaza un 30x que
 /// degrade a `http://`): `require_https` valida solo la URL inicial, no el destino tras redirects.
+/// Tiene `connect_timeout` (un host que black-holea la conexion no cuelga el worker para siempre);
+/// NO pone un timeout TOTAL aca porque este cliente tambien baja `.pck` grandes (un total cortaria
+/// una descarga lenta pero valida). Los GET de respuesta CHICA (manifest/JSON) le suman un
+/// `.timeout()` por-request.
 pub fn http_client() -> Result<reqwest::blocking::Client> {
     let policy = reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() >= 10 {
@@ -154,9 +158,14 @@ pub fn http_client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
         .redirect(policy)
+        .connect_timeout(std::time::Duration::from_secs(20))
         .build()
         .context("construir cliente http")
 }
+
+/// Timeout TOTAL para un GET de respuesta CHICA (manifest, JSON de la API): seguro de poner porque
+/// el cuerpo es chico. NO usar en descargas de assets (cortaria un `.pck` grande lento).
+const SMALL_GET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// Resuelve la URL del `set-manifest.json` del **ULTIMO release** de un repo PUBLICO de GitHub.
 /// Consulta `GET /repos/{owner}/{repo}/releases/latest` (sin login: el rate-limit anonimo de
@@ -166,26 +175,33 @@ pub fn http_client() -> Result<reqwest::blocking::Client> {
 /// `releases/latest` excluye drafts y pre-releases (lo que GitHub considera "el ultimo").
 pub fn resolve_latest_manifest(owner: &str, repo: &str) -> Result<String> {
     let api = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("construir cliente http")?;
-    let resp = client
-        .get(&api)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()
-        .with_context(|| format!("GET {api}"))?;
+    let resp = github_api_get(&api)?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         bail!(
             "el repo {owner}/{repo} no tiene releases publicados todavia (¿ya publicaste un set?)"
         );
     }
-    let body = resp
+    let body = crate::github::check_api_status(resp)?
         .error_for_status()
         .context("github api (releases/latest)")?
         .text()?;
     manifest_url_from_latest(owner, repo, &body)
+}
+
+/// GET a la API de GitHub (api.github.com) con el cliente comun (redirect-policy https + connect
+/// timeout), los headers estandar, un timeout total chico, y el token GUARDADO si lo hay (sube el
+/// limite anonimo de 60/h a 5000/h — un grupo NATeado lo agota rapido sin esto). Como va SOLO a
+/// api.github.com, mandar el token es seguro (no se filtra a un host ajeno).
+fn github_api_get(api: &str) -> Result<reqwest::blocking::Response> {
+    let mut req = http_client()?
+        .get(api)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(SMALL_GET_TIMEOUT);
+    if let Some(tok) = crate::github::load_token() {
+        req = req.bearer_auth(tok);
+    }
+    req.send().with_context(|| format!("GET {api}"))
 }
 
 /// El tag del ULTIMO release (no-draft, no-prerelease) de un repo PUBLICO de GitHub. `Ok(None)` si el
@@ -194,20 +210,11 @@ pub fn resolve_latest_manifest(owner: &str, repo: &str) -> Result<String> {
 /// lo excluye y devuelve el ultimo release de VERSION.
 pub fn latest_release_tag(owner: &str, repo: &str) -> Result<Option<String>> {
     let api = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("construir cliente http")?;
-    let resp = client
-        .get(&api)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()
-        .with_context(|| format!("GET {api}"))?;
+    let resp = github_api_get(&api)?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None); // sin releases todavia
     }
-    let body = resp
+    let body = crate::github::check_api_status(resp)?
         .error_for_status()
         .context("github api (releases/latest)")?
         .text()?;
@@ -296,12 +303,12 @@ pub fn get_text(url: &str) -> Result<String> {
     // reqwest por las dudas el llamador pase una URL FIRMADA (`?key=..`). Asi el comportamiento seguro
     // es el default y no depende de que cada call-site se acuerde (este bug ya mordio antes).
     let safe = redact_url(url);
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("construir cliente http")?;
-    let body = client
+    // Cliente COMUN (redirect-policy https-only + connect timeout): el set-manifest es la lista
+    // BLAKE3 que autoriza cada escritura de `.dll`/`.pck`, asi que NO debe poder seguir un 30x a
+    // http://. Mas un timeout total chico (respuesta chica) para no colgar el worker.
+    let body = http_client()?
         .get(url)
+        .timeout(SMALL_GET_TIMEOUT)
         .send()
         .map_err(|e| e.without_url())
         .with_context(|| format!("GET {safe}"))?

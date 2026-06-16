@@ -56,6 +56,7 @@ fn nexus_client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(20))
         .build()
         .context("construir cliente http de Nexus")
 }

@@ -63,38 +63,17 @@ pub fn check_github(
     let mut req = transport::http_client()?
         .get(&url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28");
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(std::time::Duration::from_secs(45)); // respuesta chica: timeout total seguro
     if let Some(tok) = crate::github::load_token() {
         req = req.bearer_auth(tok); // 5000/h autenticado vs 60/h anonimo
     }
     let resp = req.send().with_context(|| format!("GET {url}"))?;
-    let status = resp.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
         bail!("el repo {owner}/{repo} no existe o no tiene releases");
     }
-    // Token guardado pero invalido/expirado: el chequeo de releases publicas anda anonimo, asi que
-    // un 401 viene del token. Avisar claro (sino seria un error generico de un chequeo que sin token
-    // hubiera funcionado).
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        bail!(
-            "el token de GitHub guardado es invalido o expiro — desconectalo con `github-logout` (o \
-             reconecta con `github-login`); el chequeo de mods no necesita token"
-        );
-    }
-    // Rate-limit de la API: 403 (primario) / 429 (secundario) con `x-ratelimit-remaining: 0`.
-    if (status == reqwest::StatusCode::FORBIDDEN || status.as_u16() == 429)
-        && resp
-            .headers()
-            .get("x-ratelimit-remaining")
-            .and_then(|v| v.to_str().ok())
-            == Some("0")
-    {
-        bail!(
-            "limite de la API de GitHub agotado (60/h sin login). Reintenta mas tarde, o usa \
-             `github-login` para 5000/h."
-        );
-    }
-    let body = resp
+    // Token invalido / rate-limit -> mensaje claro (mismo decode compartido que los GET de transport).
+    let body = crate::github::check_api_status(resp)?
         .error_for_status()
         .context("github api (releases)")?
         .text()?;

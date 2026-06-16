@@ -172,17 +172,54 @@ fn load_from(path: &Path) -> Config {
 
 pub fn save(cfg: &Config) -> Result<()> {
     let path = config_path().context("no se pudo resolver el directorio de config")?;
+    save_to(&path, cfg)
+}
+
+/// Guarda `cfg` en `path` de forma ATOMICA: escribe a un `.tmp` y RENOMBRA sobre el destino (rename
+/// es atomico en el mismo volumen, y en Windows reemplaza). `std::fs::write` TRUNCA primero: si la
+/// app crashea/corta a mitad, dejaba un `config.toml` VACIO y se perdia TODA la config (install_root,
+/// suscripciones, etc.). El parametro `path` es para poder testear sin tocar el %APPDATA% real.
+fn save_to(path: &Path, cfg: &Config) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let s = toml::to_string_pretty(cfg)?;
-    std::fs::write(&path, s).with_context(|| format!("escribiendo {}", path.display()))?;
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, s).with_context(|| format!("escribiendo {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| {
+        let _ = std::fs::remove_file(&tmp); // no dejar el .tmp colgado si el rename falla
+        format!("reemplazando {}", path.display())
+    })?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_to_es_atomico_y_round_trip() {
+        let dir = std::env::temp_dir().join("sts2_modsync_cfg_save");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap(); // evitar la carrera delete-then-write en Windows
+        let path = dir.join("config.toml");
+        let cfg = Config {
+            install_root: Some(std::path::PathBuf::from("/tmp/StS2")),
+            subscribed_sets: vec!["repo:owner/set".into()],
+            ..Config::default()
+        };
+        save_to(&path, &cfg).unwrap();
+        // El destino existe, NO quedo ningun `.tmp` colgado, y re-leerlo conserva los campos.
+        assert!(path.exists());
+        assert!(!path.with_extension("toml.tmp").exists());
+        let back = load_from(&path);
+        assert_eq!(back.install_root, cfg.install_root);
+        assert_eq!(back.subscribed_sets, cfg.subscribed_sets);
+        // Sobrescribir (otro save) tambien anda y no deja `.tmp`.
+        save_to(&path, &Config::default()).unwrap();
+        assert!(!path.with_extension("toml.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn load_from_respalda_config_corrupta_y_no_resetea_en_silencio() {

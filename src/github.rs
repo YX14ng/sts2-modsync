@@ -60,8 +60,38 @@ pub fn is_connected() -> bool {
 fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .user_agent(UA)
+        .connect_timeout(std::time::Duration::from_secs(20))
         .build()
         .context("construir cliente http")
+}
+
+/// Convierte en un error CLARO los status de la API de GitHub que merecen explicacion (token
+/// invalido / rate-limit agotado); si no es ninguno de esos, devuelve la respuesta intacta para que
+/// el caller maneje el 404 y `error_for_status`. UN solo lugar para el mensaje "logueate para 5000/h"
+/// (antes estaba copiado en `modupdate` y faltaba en los GET de `transport`).
+pub fn check_api_status(resp: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
+    use reqwest::StatusCode;
+    let status = resp.status();
+    if status == StatusCode::UNAUTHORIZED {
+        bail!(
+            "el token de GitHub guardado es invalido o expiro — desconectalo con `github-logout` (o \
+             reconecta con `github-login`); el chequeo de releases publicas NO necesita token"
+        );
+    }
+    // Rate-limit: 403 (primario) / 429 (secundario) con `x-ratelimit-remaining: 0`.
+    if (status == StatusCode::FORBIDDEN || status.as_u16() == 429)
+        && resp
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            == Some("0")
+    {
+        bail!(
+            "limite de la API de GitHub agotado (60/h sin login). Reintenta mas tarde, o usa \
+             `github-login` para 5000/h (si ya estas logueado, el chequeo lo usa automaticamente)."
+        );
+    }
+    Ok(resp)
 }
 
 // --- OAuth device flow -------------------------------------------------------

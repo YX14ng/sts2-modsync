@@ -49,6 +49,10 @@ fn main() -> Result<()> {
         println!("sts2-modsync {} OK", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // Inicializar el log para el modo CLI (el GUI lo hace en `gui::run`). Best-effort. Importa
+    // sobre todo para `nxm <link>`, que Windows lanza SIN consola desde el navegador: sin esto, un
+    // fallo de descarga/extraccion no dejaba ningun rastro y el panic-hook no estaba instalado.
+    sts2_modsync::logging::init("cli");
     if cmd == "update" {
         return cmd_update();
     }

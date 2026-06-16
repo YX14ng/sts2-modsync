@@ -14,7 +14,6 @@ const REPO: &str = "sts2-modsync";
 /// Exe (dentro del zip del release) que se extrae y reemplaza al actualizar. Single-exe:
 /// es el unico binario (`sts2-modsync.exe`), el mismo que abre la GUI.
 const ASSET_EXE: &str = "sts2-modsync.exe";
-const UA: &str = concat!("sts2-modsync/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone)]
 pub struct Release {
@@ -30,11 +29,11 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Reusa `transport::http_client()`: hereda la redirect-policy HTTPS-only (clave aca: se baja y
+/// EJECUTA el binario nuevo, asi que un 30x que degrade a `http://` debe rechazarse) + el
+/// connect-timeout. Mismo User-Agent.
 fn client() -> Result<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
-        .user_agent(UA)
-        .build()
-        .context("construir cliente http")
+    crate::transport::http_client()
 }
 
 /// Consulta el ultimo release. `Ok(None)` si todavia no hay releases (404). Error solo si
@@ -46,6 +45,7 @@ pub fn check_latest() -> Result<Option<Release>> {
     let url = format!("https://api.github.com/repos/{OWNER}/{REPO}/releases?per_page=30");
     let resp = client()?
         .get(&url)
+        .timeout(std::time::Duration::from_secs(45)) // respuesta chica: que un cuelgue no frene el auto-check
         .send()
         .with_context(|| format!("GET {url}"))?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {

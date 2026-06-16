@@ -149,6 +149,9 @@ impl App {
         };
         match rx.try_recv() {
             Ok(GhEvent::DeviceCode { user_code, uri }) => {
+                // Abrir el navegador automaticamente en la pagina de autorizacion (lo que promete el
+                // flujo "log in con el navegador"); igual queda el link visible para re-abrir a mano.
+                ctx.open_url(egui::OpenUrl::new_tab(&uri));
                 self.gh_device = Some((user_code, uri));
                 ctx.request_repaint();
             }
@@ -374,17 +377,28 @@ impl App {
                     self.gh_connect_pat(ctx);
                 }
             });
-            // Link DIRECTO a crear el token ya con el scope correcto preseleccionado: crear un PAT a
-            // mano (elegir scopes) es la parte confusa para no-expertos.
+            // Boton que ABRE EL NAVEGADOR en la pagina de creacion del token, con el scope correcto ya
+            // preseleccionado: crear un PAT a mano (elegir scopes) es la parte confusa para no-expertos.
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("¿No tenes uno?").weak());
-                ui.hyperlink_to(
-                    "Crear el token (scope public_repo ya marcado)",
-                    "https://github.com/settings/tokens/new?scopes=public_repo&description=sts2-modsync",
-                );
+                if ui
+                    .button("Abrir GitHub para crear el token")
+                    .on_hover_text(
+                        "Abre el navegador en GitHub con el scope public_repo ya marcado. Logueate, \
+                         genera el token y pegalo arriba.",
+                    )
+                    .clicked()
+                {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(
+                        "https://github.com/settings/tokens/new?scopes=public_repo&description=sts2-modsync",
+                    ));
+                }
             });
+            // "Log in con el navegador" de verdad (OAuth device-flow): abre GitHub, autorizas y listo,
+            // sin pegar un token. Solo aparece si la app se compilo con un OAUTH_CLIENT_ID (registrar
+            // una OAuth App en GitHub); sin el, queda el camino del PAT de arriba.
             if crate::github::device_flow_enabled()
-                && ui.button("Conectar con GitHub (device-flow)").clicked()
+                && ui.button("Log in con GitHub (abre el navegador)").clicked()
             {
                 self.gh_connect_device(ctx);
             }
