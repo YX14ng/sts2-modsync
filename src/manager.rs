@@ -131,6 +131,39 @@ pub fn install_from_zip(install: &Install, archive_path: &Path, overwrite: bool)
     res
 }
 
+/// `true` si ya hay alguna copia instalada del mod `id` (en `mods/` o `mods_disabled/`, con
+/// CUALQUIER nombre de carpeta) — lo que un install con `overwrite` mandaria a la papelera. Para
+/// avisar/confirmar antes de pisar (p.ej. el flujo `nxm://` lanzado por el protocolo, sin la app).
+pub fn is_id_installed(install: &Install, id: &str) -> bool {
+    mod_dir(install, id).is_some() || !dirs_with_id(install, id).is_empty()
+}
+
+/// Como `install_from_zip` (overwrite), pero si el id que trae el archivo YA esta instalado llama a
+/// `confirm_replace(id)` ANTES de reemplazar; si devuelve `false`, no instala nada y retorna
+/// `Ok(None)`. Extrae UNA sola vez (lee el id del temp y instala de ahi). Para el flujo `nxm://`,
+/// que lanza el protocolo: como no pasa por la app, sin esto pisaria el mod en silencio.
+pub fn install_from_zip_confirmed(
+    install: &Install,
+    archive_path: &Path,
+    confirm_replace: impl FnOnce(&str) -> bool,
+) -> Result<Option<String>> {
+    ensure_game_closed()?;
+    let tmp = extract_archive_to_temp(archive_path)?;
+    let res = (|| {
+        let mod_root =
+            find_mod_root(&tmp).context("el archivo no contiene un mod con <id>.json")?;
+        let manifest = modlist::read_manifest(&mod_root)
+            .context("el mod del archivo no tiene <id>.json valido")?;
+        let id = safe_id(&manifest.id)?.to_string();
+        if is_id_installed(install, &id) && !confirm_replace(&id) {
+            return Ok(None);
+        }
+        install_from_dir(install, &mod_root, true).map(Some)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    res
+}
+
 /// Instala un `.zip` REEMPLAZANDO el mod `expected_id`, pero SOLO si el `<id>.json` DENTRO del zip
 /// declara EXACTAMENTE ese id. Asi un release del upstream de A nunca puede pisar a B: el id que se
 /// instala lo controla el contenido del zip (el upstream), no el llamador, asi que sin esta guarda
@@ -609,6 +642,52 @@ mod tests {
         }
         let id = install_from_zip(&install, &zip_path, false).unwrap();
         assert_eq!(id, "Mod");
+        assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn install_from_zip_confirmed_solo_pregunta_si_ya_existe() {
+        use std::cell::Cell;
+        use std::io::Write;
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_zip_confirmed");
+        let zip_path = install.root.join("mod.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            zw.start_file("Mod/Mod.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(br#"{"id":"Mod"}"#).unwrap();
+            zw.finish().unwrap();
+        }
+
+        // 1) El mod NO esta instalado: NO se pide confirmacion y se instala directo.
+        assert!(!is_id_installed(&install, "Mod"));
+        let asked = Cell::new(false);
+        let r = install_from_zip_confirmed(&install, &zip_path, |_| {
+            asked.set(true);
+            true
+        })
+        .unwrap();
+        assert_eq!(r, Some("Mod".to_string()));
+        assert!(
+            !asked.get(),
+            "no debe preguntar si el mod no estaba instalado"
+        );
+        assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
+
+        // 2) Ya instalado + el usuario dice NO: no reemplaza nada (no manda a la papelera) y da None.
+        assert!(is_id_installed(&install, "Mod"));
+        let r = install_from_zip_confirmed(&install, &zip_path, |id| {
+            assert_eq!(id, "Mod"); // se le pasa el id en conflicto
+            false
+        })
+        .unwrap();
+        assert_eq!(r, None, "con confirm=false no debe instalar");
         assert!(install.mods_dir.join("Mod").join("Mod.json").is_file());
         let _ = std::fs::remove_dir_all(&install.root);
     }

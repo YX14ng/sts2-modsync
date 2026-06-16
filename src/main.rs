@@ -930,12 +930,17 @@ fn run_nxm(link: &str) -> Result<String> {
     }
     use manager::ArchiveKind;
     match manager::archive_kind(&tmp) {
-        // .zip o .7z: instalar directo (reemplaza el mod del id que declare el archivo).
+        // .zip o .7z: instalar. Si el id YA esta instalado, CONFIRMAR antes de reemplazar (este flujo
+        // lo lanza el protocolo, no la app: sin el prompt pisaria el mod en silencio).
         ArchiveKind::Zip | ArchiveKind::SevenZ => {
-            let r = manager::install_from_zip(&install, &tmp, true);
+            let r = manager::install_from_zip_confirmed(&install, &tmp, confirm_replace_dialog);
             let _ = std::fs::remove_file(&tmp);
-            let id = r.context("instalando el archivo de Nexus")?;
-            Ok(format!("instalado desde Nexus: {id}"))
+            match r.context("instalando el archivo de Nexus")? {
+                Some(id) => Ok(format!("instalado desde Nexus: {id}")),
+                None => {
+                    Ok("cancelado: el mod ya estaba instalado y elegiste no reemplazarlo.".into())
+                }
+            }
         }
         // .rar u otro: NO se extrae; preservar el archivo (a Descargas) para instalar a mano.
         ArchiveKind::Other => match move_to_downloads(&tmp, &url) {
@@ -1012,6 +1017,22 @@ fn nxm_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+/// Dialogo Si/No para confirmar reemplazar un mod YA instalado en el flujo `nxm://` (lo lanza el
+/// protocolo, no la app). `true` = el usuario eligio reemplazar. Si el dialogo no se puede mostrar,
+/// rfd devuelve un resultado distinto de `Yes` -> NO reemplaza (conservador: ante la duda, no pisar).
+fn confirm_replace_dialog(id: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Reemplazar un mod ya instalado")
+        .set_description(format!(
+            "Ya tenes el mod \"{id}\" instalado. La descarga de Nexus lo va a REEMPLAZAR (la version \
+             actual va a la papelera, es reversible). ¿Reemplazarlo?"
+        ))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 /// Muestra un dialogo del SO con el resultado del nxm (cuando se lanza por el protocolo no hay

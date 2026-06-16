@@ -3,6 +3,17 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.20.0] - 2026-06-16 — confirmar antes de pisar un mod por `nxm://` + versiones estable/beta
+
+- **El flujo `nxm://` (boton "Mod Manager Download" de Nexus) ahora CONFIRMA antes de reemplazar** un
+  mod que ya tenes instalado (dialogo Si/No; la version vieja va a la papelera, reversible). Como lo
+  lanza el protocolo —no la app— antes pisaba el mod en silencio. Si no lo tenes, instala sin
+  preguntar. Si el dialogo no se puede mostrar, NO reemplaza (conservador). Nuevos:
+  `manager::is_id_installed` + `manager::install_from_zip_confirmed` (extrae una sola vez).
+- **Comparacion de versiones: el ESTABLE le gana a su propia beta.** A igual `X.Y.Z`, ahora `1.2.0` se
+  considera mas nuevo que `1.2.0-rc1` (asi quien quedo en una beta recibe el estable cuando sale), pero
+  una beta no "actualiza" sobre el estable. Afecta el auto-update de mods y la deteccion de set nuevo.
+
 ## [1.19.0] - 2026-06-16 — la sync limpia copias duplicadas del mismo mod
 
 - **Tras sincronizar, las carpetas DUPLICADAS de un mod del set se mandan a la papelera** (reversible).

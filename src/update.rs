@@ -127,10 +127,27 @@ pub fn check() -> Option<Release> {
     is_newer(&rel.version, current_version()).then_some(rel)
 }
 
-/// Compara dos versiones "X.Y.Z" (con o sin 'v'; ignora sufijos `-pre`/`+build`). True si
-/// `latest` es mayor que `current`.
+/// Compara dos versiones "X.Y.Z" (con o sin 'v'; `+build` se ignora). True si `latest` es mayor
+/// que `current`. A igual X.Y.Z, una version ESTABLE es mayor que su prerelease (`1.2.0` > `1.2.0-rc1`,
+/// asi quien quedo en una beta recibe el estable cuando sale), pero un prerelease NO es mayor que el
+/// estable. Entre dos prereleases del mismo core NO se decide (mismo criterio que antes; sin regresion).
 pub fn is_newer(latest: &str, current: &str) -> bool {
-    parse_ver(latest) > parse_ver(current)
+    let (lc, cc) = (parse_ver(latest), parse_ver(current));
+    if lc != cc {
+        return lc > cc;
+    }
+    !is_prerelease(latest) && is_prerelease(current)
+}
+
+/// `true` si la version trae un sufijo de prerelease semver (`X.Y.Z-rc1`): un `-` DESPUES del core
+/// (antes del `+build`, que es metadata y no cuenta). `1.2.0` no; `1.2.0-beta` si.
+fn is_prerelease(s: &str) -> bool {
+    s.trim()
+        .trim_start_matches('v')
+        .split('+')
+        .next()
+        .unwrap_or("")
+        .contains('-')
 }
 
 pub(crate) fn parse_ver(s: &str) -> (u64, u64, u64) {
@@ -262,8 +279,12 @@ mod tests {
         assert!(is_newer("1.0.0", "0.9.9"));
         assert!(!is_newer("0.1.0", "0.1.0"));
         assert!(!is_newer("0.1.0", "0.2.0"));
-        // los sufijos -pre se ignoran (simplificacion): mismo core => no es mayor.
-        assert!(!is_newer("0.1.0-rc1", "0.1.0"));
+        // a igual X.Y.Z: el ESTABLE es mayor que su prerelease, pero el prerelease no que el estable.
+        assert!(is_newer("0.1.0", "0.1.0-rc1")); // el estable sale -> el que estaba en la beta lo recibe
+        assert!(!is_newer("0.1.0-rc1", "0.1.0")); // un prerelease no "actualiza" sobre el estable
+        assert!(!is_newer("1.2.0", "1.2.0")); // estable == estable
+        assert!(!is_newer("1.2.0-rc2", "1.2.0-rc1")); // entre dos prereleases del mismo core: no se decide
+        assert!(is_newer("1.2.1-rc1", "1.2.0")); // core mayor manda aunque sea prerelease
     }
 
     #[test]

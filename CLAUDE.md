@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.19.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.20.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -56,10 +56,8 @@ GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para s
   `mod-update <id>` ya actualiza mods de Nexus si la cuenta es Premium.
 
 Detalle por version en [CHANGELOG.md](CHANGELOG.md). Lo que sigue (sin empezar): OAuth
-`OAUTH_CLIENT_ID` real, delta zstd, y confirmar en el flujo `nxm` antes de reemplazar si el id del
-archivo colisiona con OTRO mod instalado (hoy `install_from_zip(overwrite=true)` lo manda a la
-papelera sin preguntar; reversible, no rompe invariantes, pero el flujo lanzado por el protocolo no
-tiene prompt). (.7z de Nexus: HECHO en 1.16.0.)
+`OAUTH_CLIENT_ID` real y delta zstd. (.7z de Nexus: HECHO en 1.16.0. Confirmar antes de pisar un mod
+ya instalado por `nxm://`: HECHO en 1.20.0 — `manager::install_from_zip_confirmed` + dialogo Si/No.)
 
 - **Mod manager (hecho, compila):** lista/detalle, enable/disable (= mover carpeta), instalar
   (carpeta/.zip) / desinstalar (papelera), perfiles, lanzar el juego, deps/conflictos, orden de
