@@ -191,6 +191,10 @@ struct App {
     profiles: Vec<Profile>,
     profiles_loaded: bool,
     new_profile: String,
+    // Compartir la lista activa por CODIGO: `share_code` = el ultimo codigo generado (para mostrar/
+    // copiar); `import_code` = el que el usuario pega para aplicar.
+    share_code: String,
+    import_code: String,
 
     // Pestaña Publicar
     pub_name: String,
@@ -257,6 +261,8 @@ impl App {
             profiles: Vec::new(),
             profiles_loaded: false,
             new_profile: String::new(),
+            share_code: String::new(),
+            import_code: String::new(),
             pub_name,
             pub_version: String::new(),
             pub_version_job: None,

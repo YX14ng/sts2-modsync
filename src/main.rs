@@ -98,6 +98,7 @@ fn main() -> Result<()> {
         }
         "publish" => cmd_publish(&install, &args)?,
         "dedupe" => cmd_dedupe(&install)?,
+        "loadcode" => cmd_loadcode(&install, &args)?,
         "mod-source" => cmd_mod_source(&args)?,
         "mod-check" => cmd_mod_check(&install, &args)?,
         "mod-update" => cmd_mod_update(&install, &args)?,
@@ -111,7 +112,7 @@ fn main() -> Result<()> {
         }
         other => {
             bail!(
-                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|dedupe|seed|help)"
+                "subcomando desconocido: {other:?} (probá: list|enable|disable|launch|sync|mod-check|mod-update|dedupe|loadcode|seed|help)"
             )
         }
     }
@@ -230,6 +231,59 @@ fn cmd_dedupe(install: &detect::Install) -> Result<()> {
         }
     }
     println!("listo: {removed} duplicado(s) a la papelera.");
+    Ok(())
+}
+
+/// `loadcode`: SIN argumento imprime el codigo compartible de la lista activa (que mods estan
+/// habilitados); CON un `<codigo>` lo APLICA (habilita esos, deshabilita el resto). No baja archivos:
+/// el amigo ya tiene que tener los mods. El orden de carga canonico sale solo.
+fn cmd_loadcode(install: &detect::Install, args: &[String]) -> Result<()> {
+    use sts2_modsync::loadcode;
+    match args.get(1) {
+        None => {
+            let mods = modlist::scan(install)?;
+            let ids: Vec<String> = mods
+                .iter()
+                .filter(|m| m.enabled)
+                .map(|m| m.id().to_string())
+                .collect();
+            let code = loadcode::encode("", &ids);
+            println!(
+                "Codigo de la lista actual ({} mods activos) — pasaselo a un amigo (lo aplica con \
+                 `loadcode <codigo>` o pegandolo en la pestaña Perfiles):\n\n{code}\n",
+                ids.len()
+            );
+        }
+        Some(code) => {
+            let (name, ids) = loadcode::decode(code)?;
+            let prof = profile::Profile {
+                name: if name.trim().is_empty() {
+                    "codigo".into()
+                } else {
+                    name.clone()
+                },
+                enabled_ids: ids,
+            };
+            let r = profile::apply(install, &prof)?;
+            println!(
+                "Lista{} aplicada: +{} activados, -{} desactivados.",
+                if name.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" \"{name}\"")
+                },
+                r.enabled.len(),
+                r.disabled.len()
+            );
+            if !r.not_installed.is_empty() {
+                println!(
+                    "  Faltan {} (no instalados, no se pudieron activar): {}",
+                    r.not_installed.len(),
+                    r.not_installed.join(", ")
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1082,6 +1136,9 @@ fn print_help() {
     println!("  launch [--direct]     lanza el juego (por Steam; --direct abre el exe sin Steam)");
     println!(
         "  dedupe                limpia mods duplicados (deja la version mas nueva, resto a papelera)"
+    );
+    println!(
+        "  loadcode [<codigo>]   sin arg: imprime el codigo de la lista activa; con codigo: lo aplica"
     );
     println!(
         "  sync <set.json|url|owner/repo>  dry-run del plan; con owner/repo sigue el ultimo release"

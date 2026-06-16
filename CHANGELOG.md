@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.15.0] - 2026-06-15 — compartir la lista de activados/desactivados por CODIGO
+
+- **Compartir tu lista de mods activados (y desactivados) con un codigo.** En la pestaña Perfiles, el
+  boton **"Generar codigo de la lista actual"** crea un codigo (`STS2L1...`) que copia al portapapeles;
+  cada perfil guardado tiene tambien un boton **"Compartir"**. Un amigo que YA tenga los mods lo pega
+  en **"Pegar un codigo" → "Aplicar codigo"**: la app ACTIVA esos mods y DESACTIVA el resto. El orden
+  de carga canonico (BaseLib + A-Z) sale solo, asi entran al mismo lobby. NO baja archivos (para eso
+  esta la sync) — solo comparte el estado on/off, sin servidor.
+- Nuevo modulo `loadcode`: `STS2L1.` + base64url(deflate(JSON)) — autocontenido, tolera que un chat
+  corte la linea, y al decodificar UNTRUSTED filtra ids no-simples y CAPA la descompresion (anti
+  zip-bomb). Aplica reusando `profile::apply`. CLI: `loadcode` (imprime el codigo) / `loadcode <codigo>`
+  (lo aplica). Deps nuevas: `flate2` (pure-Rust, miniz_oxide) + `base64`.
+
 ## [1.14.1] - 2026-06-15 — fix: actualizar/reinstalar un mod ya NO deja la version vieja
 
 - **Al instalar/actualizar un mod se quitan TODAS sus copias viejas, no solo `mods/<id>`.** Antes

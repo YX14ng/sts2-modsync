@@ -11,6 +11,7 @@ pub mod detect;
 pub mod github;
 pub mod hashing;
 pub mod launch;
+pub mod loadcode;
 pub mod logging;
 pub mod manager;
 pub mod manifest;

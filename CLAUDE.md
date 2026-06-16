@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.14.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.15.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -96,7 +96,7 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
   vacia = modo dev (`DevUnverified`). CLI `sign <archivo>` / `keygen` siguen para quien quiera firmar.
 
 `eframe` es dep **opcional** (feature `gui`); el resto del core (`reqwest`/`zip`/`trash`/`minisign`/
-`self-replace`) es dep normal.
+`self-replace`/`flate2`/`base64` —estos dos para el codigo de `loadcode`—) es dep normal.
 
 ## Arquitectura (modulos en `src/`)
 
@@ -112,7 +112,10 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
   found"; pirata sin Steamworks va directo) · `modsource` (`ModSource` GitHub/Nexus: parse/storage/web_url) ·
   `modupdate` (auto-update de un mod desde su upstream: `check_github`/`check_nexus` + `apply`
   baja+instala) · `nexus` (API v1 de Nexus: API key en el llavero + `validate` + `check` + `download_link`)
-  · `nxm` (handler del protocolo `nxm://`: parse + registro en HKCU, solo Windows).
+  · `nxm` (handler del protocolo `nxm://`: parse + registro en HKCU, solo Windows) · `loadcode`
+  (codigo compartible de la lista de activados: `STS2L1.`+base64url(deflate(JSON)); `encode`/`decode`
+  —decode UNTRUSTED: filtra ids no-simples + capa la descompresion anti zip-bomb—; aplica reusando
+  `profile::apply`. GUI en la pestaña Perfiles; CLI `loadcode [<codigo>]`).
 - **Sync (añadido):** `manifest` (set-manifest + validacion paths + toposort; `FileEntry.deltas`)
   · `hashing` (blake3) · `sync` (`plan()` elige delta vs full + `apply()` transaccional con
   delta/fallback) · `delta` (bsdiff via `qbsdiff`: `diff()` lado publish, `apply()` lado sync; el
