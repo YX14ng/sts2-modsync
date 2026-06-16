@@ -518,7 +518,12 @@ impl eframe::App for App {
             )
             .show_inside(ui, |ui| self.ui_nav(ui, &ctx));
 
+        // El area central DEBE pintar su fondo con el color del tema: `Frame::default()` es
+        // transparente y dejaba ver la superficie raiz (negra) -> en modo claro el contenido que NO
+        // esta en una card (orden de carga, fila de busqueda) quedaba sobre negro. Lo rellenamos con
+        // `panel_fill` (claro en tema claro, oscuro en oscuro), igual que la barra de navegacion.
         egui::Frame::default()
+            .fill(ctx.global_style().visuals.panel_fill)
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 // El contenido de cada pestaña puede superar el alto de la ventana (la minima es

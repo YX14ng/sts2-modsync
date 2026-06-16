@@ -115,10 +115,14 @@ impl App {
                 format!("Conflictos (ids duplicados): {}", conflicts.join(", ")),
             );
         }
-        ui.label(format!(
-            "Orden de carga (multiplayer): {}",
-            modlist::load_order(&self.mods).join("  →  ")
-        ));
+        // En acento (azul) para que se note: es una linea de info larga que conviene distinguir.
+        ui.colored_label(
+            ACCENT,
+            format!(
+                "Orden de carga (multiplayer): {}",
+                modlist::load_order(&self.mods).join("  →  ")
+            ),
+        );
         if !modlist::load_order_enforced(&self.mods) {
             ui.colored_label(
                 WARN,

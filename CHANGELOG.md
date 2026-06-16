@@ -3,6 +3,16 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.11.2] - 2026-06-15 — fix: modo claro tenia el area central con FONDO NEGRO
+
+- **El fondo del area central ya no queda negro en modo claro.** El `Frame` del contenido central era
+  TRANSPARENTE, asi que dejaba ver la superficie raiz (oscura): todo lo que NO esta en una card (el
+  orden de carga, la fila de busqueda) quedaba sobre negro y casi no se leia. Ahora ese `Frame` se
+  rellena con `panel_fill` del tema (claro en tema claro, oscuro en oscuro), igual que la barra de
+  navegacion — las cards blancas siguen resaltando sobre el fondo claro.
+- La linea "Orden de carga (multiplayer): ..." pasa a estar en color **acento (azul)** para que se
+  note (es una linea de info larga).
+
 ## [1.11.1] - 2026-06-15 — fix: la pestaña Sync se podia salir de la ventana sin scroll
 
 - **El contenido de las pestañas ahora se puede DESLIZAR.** El area central no tenia un scroll, asi
