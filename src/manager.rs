@@ -112,7 +112,7 @@ pub fn install_from_dir(install: &Install, src: &Path, overwrite: bool) -> Resul
         .context("la carpeta no contiene un <id>.json valido de un mod")?;
     let id = safe_id(&manifest.id)?.to_string();
     let dst = install.mods_dir.join(&id);
-    prepare_dst(install, &id, overwrite)?;
+    prepare_dst(install, src, &id, overwrite)?;
     copy_dir(src, &dst)?;
     Ok(id)
 }
@@ -167,17 +167,60 @@ pub fn open_folder(path: &Path) -> Result<()> {
 
 // --- helpers de filesystem ---------------------------------------------------
 
-/// Si ya hay un mod con `id` (habilitado o no): falla salvo `overwrite` (en cuyo caso lo
-/// manda a la papelera). Asegura que exista `mods/`.
-fn prepare_dst(install: &Install, id: &str, overwrite: bool) -> Result<()> {
-    if let Some(existing) = mod_dir(install, id) {
+/// Quita TODAS las copias instaladas del mod `id` antes de poner la nueva: en `mods/` Y
+/// `mods_disabled/`, con CUALQUIER nombre de carpeta (no solo `mods/<id>`). Asi actualizar/reinstalar
+/// un mod NO deja la version vieja como duplicado — el bug de "no borra los mods que reemplaza".
+/// Con `!overwrite`, si ya hay alguna copia FALLA (no pisa sin permiso). Nunca borra `src` (por si se
+/// instala desde dentro de `mods/`). Asegura que exista `mods/`.
+fn prepare_dst(install: &Install, src: &Path, id: &str, overwrite: bool) -> Result<()> {
+    let src_canon = std::fs::canonicalize(src).ok();
+    let mut copies = dirs_with_id(install, id);
+    // La carpeta EXACTA mods/<id> o mods_disabled/<id> aunque su `<id>.json` no parsee (carpeta
+    // vieja/stray): tambien se reemplaza, como antes.
+    if let Some(exact) = mod_dir(install, id)
+        && !copies.contains(&exact)
+    {
+        copies.push(exact);
+    }
+    // Excluir la FUENTE: por path crudo (cubre el caso aunque `canonicalize` falle) Y por canonico
+    // (cubre symlink/normalizacion). Si `canonicalize(src)` fallo, solo se excluye por path crudo.
+    copies.retain(|d| {
+        d != src && (src_canon.is_none() || std::fs::canonicalize(d).ok() != src_canon)
+    });
+    if !copies.is_empty() {
         if !overwrite {
             bail!("ya hay un mod {id:?} instalado (usa 'reemplazar' para sobreescribir)");
         }
-        trash::delete(&existing).with_context(|| format!("reemplazando {id:?}"))?;
+        for dir in &copies {
+            // Via `trash_mod_dir`: re-valida juego-cerrado + que sea hija directa de mods/ o
+            // mods_disabled/ (defensa en profundidad, aunque `copies` ya sale de read_dir de esos).
+            trash_mod_dir(install, dir)
+                .with_context(|| format!("reemplazando {id:?} ({})", dir.display()))?;
+        }
     }
     std::fs::create_dir_all(&install.mods_dir)?;
     Ok(())
+}
+
+/// Carpetas (en `mods/` y `mods_disabled/`) cuyo `<id>.json` declara `id`. Liviano: solo lee
+/// manifiestos (no calcula tamaños como `modlist::scan`). Incluye carpetas con NOMBRE distinto del
+/// id (un duplicado tipico al recibir mods por Drive con nombres versionados). LIMITE inherente: una
+/// carpeta con manifiesto ILEGIBLE y nombre != id no se puede atribuir a este id (sin manifiesto no se
+/// sabe su id), asi que no se detecta; no se infiere por nombre para no borrar un mod equivocado.
+fn dirs_with_id(install: &Install, id: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for base in [install.mods_dir.clone(), disabled_dir(install)] {
+        let Ok(rd) = std::fs::read_dir(&base) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && modlist::read_manifest(&p).is_some_and(|m| m.id == id) {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// Mueve un directorio: `rename` (instantaneo en el mismo volumen) con fallback a
@@ -389,6 +432,51 @@ mod tests {
 
         // segunda vez sin overwrite -> error (ya existe).
         assert!(install_from_dir(&install, &src, false).is_err());
+        let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn prepare_dst_detecta_copias_con_nombre_distinto_y_deshabilitadas() {
+        if crate::detect::is_game_running() {
+            eprintln!("(skip: Slay the Spire 2 esta abierto)");
+            return;
+        }
+        let install = temp_install("sts2_modsync_manager_dupdetect");
+        // Copia VIEJA con NOMBRE de carpeta distinto del id (tipico al recibir mods por Drive).
+        std::fs::create_dir_all(install.mods_dir.join("FGOCore-1.0")).unwrap();
+        std::fs::write(
+            install.mods_dir.join("FGOCore-1.0").join("FGOCore.json"),
+            r#"{"id":"FGOCore","version":"1.0"}"#,
+        )
+        .unwrap();
+        // Y una copia DESHABILITADA del mismo id.
+        std::fs::create_dir_all(disabled_dir(&install).join("FGOCore")).unwrap();
+        std::fs::write(
+            disabled_dir(&install).join("FGOCore").join("FGOCore.json"),
+            r#"{"id":"FGOCore","version":"0.9"}"#,
+        )
+        .unwrap();
+
+        // `dirs_with_id` halla AMBAS (no solo mods/<id>): es lo que el codigo viejo se perdia.
+        let found = dirs_with_id(&install, "FGOCore");
+        assert_eq!(
+            found.len(),
+            2,
+            "deberia hallar la copia renombrada y la deshabilitada"
+        );
+
+        // Instalar la version nueva SIN overwrite -> detecta el duplicado y FALLA (antes lo ignoraba
+        // por estar en una carpeta con otro nombre, y dejaba el duplicado).
+        let src_parent = install.root.join("incoming");
+        std::fs::create_dir_all(src_parent.join("FGOCore")).unwrap();
+        std::fs::write(
+            src_parent.join("FGOCore").join("FGOCore.json"),
+            r#"{"id":"FGOCore","version":"1.2"}"#,
+        )
+        .unwrap();
+        assert!(install_from_dir(&install, &src_parent.join("FGOCore"), false).is_err());
+        // No se borro nada con !overwrite.
+        assert!(install.mods_dir.join("FGOCore-1.0").is_dir());
         let _ = std::fs::remove_dir_all(&install.root);
     }
 

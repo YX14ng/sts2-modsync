@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.14.1] - 2026-06-15 — fix: actualizar/reinstalar un mod ya NO deja la version vieja
+
+- **Al instalar/actualizar un mod se quitan TODAS sus copias viejas, no solo `mods/<id>`.** Antes
+  `prepare_dst` solo reemplazaba la carpeta llamada EXACTO como el id; si la version vieja estaba en
+  una carpeta con otro nombre (tipico al recibir mods por Drive, p.ej. `mods/FGOCore-1.0`) o como una
+  copia deshabilitada, quedaba como DUPLICADO. Ahora se buscan todas las carpetas (en `mods/` y
+  `mods_disabled/`, cualquier nombre) cuyo `<id>.json` declare ese id y se mandan a la papelera antes
+  de copiar la nueva (`manager::dirs_with_id`). Asi el auto-update y la reinstalacion no dejan la
+  version anterior. Sigue exigiendo el juego cerrado, nunca toca la fuente, y es reversible (papelera).
+- Limite conocido: una carpeta con `<id>.json` ILEGIBLE y nombre != id no se puede atribuir a un id, asi
+  que no se detecta (no se infiere por nombre para no borrar un mod equivocado). El boton "Quitar
+  duplicados" tampoco la ve. Es un caso raro (manifiesto corrupto).
+
 ## [1.14.0] - 2026-06-15 — limpiar mods duplicados (deja la version mas nueva)
 
 - **Quitar mods duplicados de una.** Cuando el mismo `id` esta instalado en mas de una carpeta
