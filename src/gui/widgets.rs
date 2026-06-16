@@ -101,15 +101,7 @@ pub(super) fn mod_matches(m: &InstalledMod, filter_lower: &str) -> bool {
 }
 
 pub(super) fn human_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
+    crate::util::human_size(bytes, true)
 }
 
 /// Explicacion (colapsable) de BaseLib / ModListSorter / orden de carga para no-tecnicos.

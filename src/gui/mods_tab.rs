@@ -654,6 +654,15 @@ impl App {
     // --- auto-update de mods (upstream GitHub) ------------------------------
 
     /// Chequea en un hilo si hay version nueva de `id` en su origen (GitHub por canal, o Nexus via API).
+    /// Contexto del chequeo de updates a partir del estado actual (canal global + cuentas de Nexus).
+    fn check_ctx(&self) -> crate::modupdate::CheckCtx {
+        crate::modupdate::CheckCtx {
+            prefer_beta: self.cfg.prefer_beta,
+            nexus_connected: self.nexus_connected,
+            nexus_premium: self.nexus_premium,
+        }
+    }
+
     fn check_mod_update(&mut self, ctx: &egui::Context, id: String, src: ModSource) {
         let current = self
             .mods
@@ -661,30 +670,18 @@ impl App {
             .find(|m| m.id() == id)
             .and_then(|m| m.manifest.version.clone());
         let installed_tag = self.cfg.mod_installed_tag.get(&id).cloned();
-        let prefer_beta = self.cfg.prefer_beta;
-        let premium = self.nexus_premium;
+        let cctx = self.check_ctx();
         let (tx, rx) = channel();
         self.mod_update_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let res = match src {
-                ModSource::GitHub { owner, repo } => crate::modupdate::check_github(
-                    &owner,
-                    &repo,
-                    &id,
-                    current.as_deref(),
-                    installed_tag.as_deref(),
-                    prefer_beta,
-                ),
-                ModSource::Nexus { game, mod_id } => crate::modupdate::check_nexus(
-                    &id,
-                    &game,
-                    mod_id,
-                    current.as_deref(),
-                    installed_tag.as_deref(),
-                    premium,
-                ),
-            }
+            let res = crate::modupdate::check(
+                &src,
+                &id,
+                current.as_deref(),
+                installed_tag.as_deref(),
+                cctx,
+            )
             .map_err(|e| format!("{e:#}"));
             let _ = tx.send((id, res));
             ctx.request_repaint();
@@ -701,8 +698,7 @@ impl App {
         }
         let mods = self.mods.clone();
         let cfg = self.cfg.clone();
-        let premium = self.nexus_premium;
-        let nexus_connected = self.nexus_connected;
+        let cctx = self.check_ctx();
         let (tx, rx) = channel();
         self.mod_update_all_job = Some(rx);
         let ctx = ctx.clone();
@@ -715,30 +711,8 @@ impl App {
                 };
                 let current = m.manifest.version.as_deref();
                 let installed_tag = cfg.mod_installed_tag.get(m.id()).map(String::as_str);
-                let res = match src {
-                    ModSource::GitHub { owner, repo } => crate::modupdate::check_github(
-                        &owner,
-                        &repo,
-                        m.id(),
-                        current,
-                        installed_tag,
-                        cfg.prefer_beta,
-                    ),
-                    ModSource::Nexus { game, mod_id } => {
-                        if !nexus_connected {
-                            continue; // sin API key no se puede chequear Nexus; no es un "fallo"
-                        }
-                        crate::modupdate::check_nexus(
-                            m.id(),
-                            &game,
-                            mod_id,
-                            current,
-                            installed_tag,
-                            premium,
-                        )
-                    }
-                };
-                match res {
+                // `check` saltea Nexus sin conexion devolviendo Ok(None) (no cuenta como fallo).
+                match crate::modupdate::check(&src, m.id(), current, installed_tag, cctx) {
                     Ok(Some(upd)) => {
                         found.insert(m.id().to_string(), upd);
                     }

@@ -237,25 +237,18 @@ fn prepare_dst(install: &Install, src: &Path, id: &str, overwrite: bool) -> Resu
     Ok(())
 }
 
-/// Carpetas (en `mods/` y `mods_disabled/`) cuyo `<id>.json` declara `id`. Liviano: solo lee
-/// manifiestos (no calcula tamaños como `modlist::scan`). Incluye carpetas con NOMBRE distinto del
-/// id (un duplicado tipico al recibir mods por Drive con nombres versionados). LIMITE inherente: una
-/// carpeta con manifiesto ILEGIBLE y nombre != id no se puede atribuir a este id (sin manifiesto no se
-/// sabe su id), asi que no se detecta; no se infiere por nombre para no borrar un mod equivocado.
+/// Carpetas (en `mods/` y `mods_disabled/`) cuyo `<id>.json` declara `id`. Incluye carpetas con
+/// NOMBRE distinto del id (un duplicado tipico al recibir mods por Drive con nombres versionados).
+/// Reusa `modlist::folders_with_declared_id` (escaneo + atribucion por manifiesto unificados con la
+/// limpieza de duplicados de la sync). LIMITE inherente: una carpeta con manifiesto ILEGIBLE y nombre
+/// != id no se puede atribuir (sin manifiesto no se sabe su id); no se infiere por nombre para no
+/// borrar un mod equivocado.
 fn dirs_with_id(install: &Install, id: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for base in [install.mods_dir.clone(), disabled_dir(install)] {
-        let Ok(rd) = std::fs::read_dir(&base) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() && modlist::read_manifest(&p).is_some_and(|m| m.id == id) {
-                out.push(p);
-            }
-        }
-    }
-    out
+    modlist::folders_with_declared_id(install)
+        .into_iter()
+        .filter(|(_, mid)| mid == id)
+        .map(|(p, _)| p)
+        .collect()
 }
 
 /// Mueve un directorio: `rename` (instantaneo en el mismo volumen) con fallback a
@@ -430,11 +423,7 @@ fn find_mod_root(dir: &Path) -> Option<PathBuf> {
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!("{prefix}_{nanos}"))
+    std::env::temp_dir().join(format!("{prefix}_{}", crate::util::unique_nanos()))
 }
 
 #[cfg(test)]

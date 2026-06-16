@@ -596,38 +596,22 @@ fn sweep_parts(manifest: &SetManifest, mods_dir: &Path) {
 /// o `mods_disabled/`) que declare un id del set PERO no sea la canonica `mods/<id>/`. Pura
 /// seleccion (no borra). Solo propone una copia si la canonica `mods/<id>/` EXISTE — nunca borra la
 /// UNICA copia de un mod. Jamas mira ids fuera de `managed_ids()` (mods ajenos quedan intactos).
-fn duplicate_folders_to_clean(manifest: &SetManifest, mods_dir: &Path) -> Vec<PathBuf> {
+fn duplicate_folders_to_clean(manifest: &SetManifest, install: &Install) -> Vec<PathBuf> {
     let managed = manifest.managed_ids();
-    let mut bases = vec![mods_dir.to_path_buf()];
-    if let Some(parent) = mods_dir.parent() {
-        bases.push(parent.join(crate::modlist::DISABLED_DIRNAME));
-    }
-    let mut out = Vec::new();
-    for base in bases {
-        let Ok(rd) = std::fs::read_dir(&base) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if !p.is_dir() {
-                continue;
+    // Reusa el escaneo+atribucion del area gestionada de `modlist` (mismo criterio que `manager`).
+    crate::modlist::folders_with_declared_id(install)
+        .into_iter()
+        .filter(|(p, id)| {
+            if !managed.contains(id) {
+                return false;
             }
-            let Some(m) = crate::modlist::read_manifest(&p) else {
-                continue;
-            };
-            if !managed.contains(&m.id) {
-                continue;
-            }
-            let canonical = mods_dir.join(&m.id);
             // No tocar nada si no hay copia canonica (no borrar la unica copia); y la canonica
             // (`mods/<id>/`, lo que el sync acaba de instalar/dejar) se queda siempre.
-            if !canonical.is_dir() || p == canonical {
-                continue;
-            }
-            out.push(p);
-        }
-    }
-    out
+            let canonical = install.mods_dir.join(id);
+            canonical.is_dir() && *p != canonical
+        })
+        .map(|(p, _)| p)
+        .collect()
 }
 
 /// Tras una sync exitosa, manda a la PAPELERA (reversible) las carpetas duplicadas de los ids del
@@ -638,7 +622,7 @@ fn duplicate_folders_to_clean(manifest: &SetManifest, mods_dir: &Path) -> Vec<Pa
 /// `manager::trash_mod_dir` (juego cerrado + hija directa de `mods/`/`mods_disabled/`) asegura que
 /// nunca se toca nada fuera del area gestionada.
 pub fn clean_duplicate_folders(manifest: &SetManifest, install: &Install) -> Vec<PathBuf> {
-    duplicate_folders_to_clean(manifest, &install.mods_dir)
+    duplicate_folders_to_clean(manifest, install)
         .into_iter()
         .filter(|p| crate::manager::trash_mod_dir(install, p).is_ok())
         .collect()
@@ -1209,6 +1193,16 @@ mod tests {
         .unwrap();
     }
 
+    /// `Install` de prueba con `mods/` (y `mods_disabled/` hermano) bajo `base`.
+    fn fake_install(base: &Path) -> Install {
+        Install {
+            root: base.to_path_buf(),
+            mods_dir: base.join("mods"),
+            version: None,
+            source: crate::detect::Source::Manual,
+        }
+    }
+
     #[test]
     fn duplicate_folders_to_clean_encuentra_copias_con_otro_nombre() {
         let base = std::env::temp_dir().join("sts2_modsync_dupfolders");
@@ -1221,7 +1215,7 @@ mod tests {
         mk_mod(&mods, "Otro", "Otro"); // mod ajeno NO gestionado -> intacto
 
         let manifest = manifest_one("Mod", "Mod/a.txt");
-        let dups = duplicate_folders_to_clean(&manifest, &mods);
+        let dups = duplicate_folders_to_clean(&manifest, &fake_install(&base));
         let names: BTreeSet<String> = dups
             .iter()
             .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
@@ -1246,7 +1240,7 @@ mod tests {
         let mods = base.join("mods");
         mk_mod(&mods, "Mod-v2", "Mod"); // unica copia, con otro nombre, SIN canonica
         let manifest = manifest_one("Mod", "Mod/a.txt");
-        assert!(duplicate_folders_to_clean(&manifest, &mods).is_empty());
+        assert!(duplicate_folders_to_clean(&manifest, &fake_install(&base)).is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 

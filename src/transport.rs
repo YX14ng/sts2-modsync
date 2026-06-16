@@ -292,6 +292,10 @@ pub fn download_capped(url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
 /// una URL (p.ej. el asset de un GitHub Release) en vez de un archivo local.
 pub fn get_text(url: &str) -> Result<String> {
     require_https(url)?; // el manifest/.minisig no se bajan en claro
+    // GET de proposito GENERAL (cualquier URL): redactar la query y sacarle la URL a los errores de
+    // reqwest por las dudas el llamador pase una URL FIRMADA (`?key=..`). Asi el comportamiento seguro
+    // es el default y no depende de que cada call-site se acuerde (este bug ya mordio antes).
+    let safe = redact_url(url);
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("sts2-modsync/", env!("CARGO_PKG_VERSION")))
         .build()
@@ -299,9 +303,11 @@ pub fn get_text(url: &str) -> Result<String> {
     let body = client
         .get(url)
         .send()
-        .with_context(|| format!("GET {url}"))?
+        .map_err(|e| e.without_url())
+        .with_context(|| format!("GET {safe}"))?
         .error_for_status()
-        .with_context(|| format!("bajando {url}"))?
+        .map_err(|e| e.without_url())
+        .with_context(|| format!("bajando {safe}"))?
         .text()?;
     Ok(body)
 }

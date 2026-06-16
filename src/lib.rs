@@ -30,6 +30,7 @@ pub mod sync;
 pub mod torrent;
 pub mod transport;
 pub mod update;
+pub mod util;
 
 /// Front-end GUI (eframe/egui) de FASE 2. Opcional: solo se compila con `--features gui`
 /// para no inflar el build del core ni de la CLI. Reusa todos los modulos de arriba.

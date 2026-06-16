@@ -171,6 +171,30 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
+/// Carpetas DIRECTAS de `mods/` y `mods_disabled/` que tienen un `<id>.json` parseable, como pares
+/// (carpeta, id_declarado). Liviano (NO calcula tamaños como `scan`). Es la base comun para atribuir
+/// una carpeta a un id por su MANIFIESTO (no por el nombre) — la usan `manager::dirs_with_id` (que
+/// copias de un id reemplazar) y `sync::duplicate_folders_to_clean` (que copias duplicadas limpiar):
+/// un solo escaneo del area gestionada, con el MISMO criterio de atribucion para no divergir.
+/// LIMITE inherente (igual que antes): una carpeta con manifiesto ilegible no se puede atribuir.
+pub fn folders_with_declared_id(install: &Install) -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    for base in [install.mods_dir.clone(), disabled_dir(install)] {
+        let Ok(rd) = std::fs::read_dir(&base) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir()
+                && let Some(m) = read_manifest(&p)
+            {
+                out.push((p, m.id));
+            }
+        }
+    }
+    out
+}
+
 /// Pares (mod, dependencia) donde la dependencia no esta presente y HABILITADA. Solo
 /// para mods habilitados (un mod deshabilitado no carga; su dep no importa).
 pub fn missing_dependencies(mods: &[InstalledMod]) -> Vec<(String, String)> {
@@ -257,7 +281,9 @@ pub fn duplicates(mods: &[InstalledMod]) -> Vec<DuplicateGroup> {
 fn keep_rank(m: &InstalledMod) -> ((u64, u64, u64), bool, bool, u64) {
     let v = m.manifest.version.as_deref().unwrap_or("");
     let ver = crate::update::parse_ver(v);
-    let is_release = !is_prerelease(v); // 1.2.0 > 1.2.0-beta para el mismo X.Y.Z
+    // 1.2.0 > 1.2.0-beta para el mismo X.Y.Z. Misma definicion de "prerelease" que el auto-update
+    // (`crate::update::is_prerelease`) para que dedup y update no difieran.
+    let is_release = !crate::update::is_prerelease(v);
     let mtime = std::fs::metadata(&m.dir)
         .and_then(|md| md.modified())
         .ok()
@@ -265,17 +291,6 @@ fn keep_rank(m: &InstalledMod) -> ((u64, u64, u64), bool, bool, u64) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (ver, is_release, m.enabled, mtime)
-}
-
-/// `true` si la version es un PRE-RELEASE (sufijo `-...`, ej "1.2.0-beta"). El build-metadata
-/// (`+...`) NO cuenta. Solo afecta empates de `parse_ver` (mismo X.Y.Z).
-fn is_prerelease(v: &str) -> bool {
-    v.trim()
-        .trim_start_matches('v')
-        .split('+')
-        .next()
-        .unwrap_or("")
-        .contains('-')
 }
 
 /// Orden de carga canonico (BaseLib + A-Z) sobre los mods HABILITADOS — lo que alimenta

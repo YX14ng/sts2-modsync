@@ -920,7 +920,7 @@ fn run_nxm(link: &str) -> Result<String> {
     // sensato si no es instalable). El FORMATO real (zip/7z) lo decide `archive_kind` por MAGIC.
     let tmp = std::env::temp_dir().join(format!(
         "sts2_nxm_{}.{}",
-        nxm_suffix(),
+        sts2_modsync::util::unique_nanos(),
         url_extension(&url).as_deref().unwrap_or("bin")
     ));
     println!("bajando...");
@@ -1012,13 +1012,6 @@ fn move_to_downloads(tmp: &Path, url: &str) -> Result<std::path::PathBuf> {
     Ok(dst)
 }
 
-fn nxm_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
 /// Dialogo Si/No para confirmar reemplazar un mod YA instalado en el flujo `nxm://` (lo lanza el
 /// protocolo, no la app). `true` = el usuario eligio reemplazar. Si el dialogo no se puede mostrar,
 /// rfd devuelve un resultado distinto de `Yes` -> NO reemplaza (conservador: ante la duda, no pisar).
@@ -1106,15 +1099,7 @@ fn print_mod(m: &modlist::InstalledMod) {
 }
 
 fn human_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    if bytes >= MB {
-        format!("{:.1}MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0}KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes}B")
-    }
+    sts2_modsync::util::human_size(bytes, false)
 }
 
 fn print_plan(plan: &sync::Plan) {

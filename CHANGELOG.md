@@ -3,6 +3,21 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.22.0] - 2026-06-16 — limpieza interna (sin cambios de comportamiento)
+
+Pasada de salud de codigo salida de la auditoria: consolida logica duplicada para que no diverja.
+Sin cambios visibles para el usuario; cubierto por tests + review de equivalencia.
+
+- **Un solo dispatch de chequeo de updates** (`modupdate::check` + `CheckCtx`): antes los dos workers
+  del GUI (un mod / todos) repetian el `match GitHub/Nexus` y diferian en el guard de Nexus. Ahora
+  comparten una funcion testeable.
+- **Una sola definicion de "version prerelease"** (`update::is_prerelease`, reusada por el dedup de
+  duplicados) y **un solo escaneo del area gestionada** (`modlist::folders_with_declared_id`, reusado
+  por `manager` y por la limpieza de duplicados de la sync) — el mismo criterio de seguridad en un lugar.
+- **Modulo `util`** con `human_size` (antes duplicado GUI/CLI) y `unique_nanos` (antes 3 copias).
+- **`transport::get_text` redacta la URL en los errores** por si un futuro llamador le pasa una URL
+  firmada (defensa en profundidad; los caminos con secretos ya lo hacian).
+
 ## [1.21.0] - 2026-06-16 — fixes de robustez de la sync
 
 - **Fix (Windows): la sync ya no manda a la papelera un archivo del set que solo difiere en

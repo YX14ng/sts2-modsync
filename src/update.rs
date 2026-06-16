@@ -140,8 +140,10 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// `true` si la version trae un sufijo de prerelease semver (`X.Y.Z-rc1`): un `-` DESPUES del core
-/// (antes del `+build`, que es metadata y no cuenta). `1.2.0` no; `1.2.0-beta` si.
-fn is_prerelease(s: &str) -> bool {
+/// (antes del `+build`, que es metadata y no cuenta). `1.2.0` no; `1.2.0-beta` si. Reusado por
+/// `modlist::keep_rank` (que copia conservar al limpiar duplicados): UNA sola definicion para que la
+/// comparacion de versiones no diverja entre el auto-update y el dedup.
+pub(crate) fn is_prerelease(s: &str) -> bool {
     s.trim()
         .trim_start_matches('v')
         .split('+')

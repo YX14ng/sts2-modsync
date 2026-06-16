@@ -215,7 +215,10 @@ pub fn apply(install: &Install, mod_id: &str, asset_url: &str, tag: &str) -> Res
     let was_disabled = manager::mod_dir(install, mod_id)
         .is_some_and(|d| d.starts_with(modlist::disabled_dir(install)));
 
-    let tmp = std::env::temp_dir().join(format!("sts2_modupdate_{}.zip", unique_suffix()));
+    let tmp = std::env::temp_dir().join(format!(
+        "sts2_modupdate_{}.zip",
+        crate::util::unique_nanos()
+    ));
     // Bajar + instalar; limpiar el `.zip` temporal SIEMPRE (exito o error).
     let res = (|| {
         transport::download_capped(asset_url, &tmp, DOWNLOAD_MAX)?;
@@ -235,13 +238,6 @@ pub fn apply(install: &Install, mod_id: &str, asset_url: &str, tag: &str) -> Res
         .insert(mod_id.to_string(), tag.to_string());
     let _ = config::save(&cfg);
     Ok(())
-}
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
 }
 
 /// Chequeo de un mod cuyo origen es NEXUS. Devuelve la version disponible; si el usuario es
@@ -308,7 +304,8 @@ pub fn apply_nexus(install: &Install, mod_id: &str, nref: &NexusRef, version: &s
     let was_disabled = manager::mod_dir(install, mod_id)
         .is_some_and(|d| d.starts_with(modlist::disabled_dir(install)));
 
-    let tmp = std::env::temp_dir().join(format!("sts2_nexusupd_{}.bin", unique_suffix()));
+    let tmp =
+        std::env::temp_dir().join(format!("sts2_nexusupd_{}.bin", crate::util::unique_nanos()));
     let res = (|| {
         transport::download_capped(&url, &tmp, DOWNLOAD_MAX)?;
         manager::install_update_zip(install, &tmp, mod_id)
@@ -341,6 +338,53 @@ fn url_looks_archive(url: &str) -> bool {
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase());
     matches!(ext.as_deref(), Some("zip") | Some("7z"))
+}
+
+/// Contexto del chequeo de update: canal global + estado de las cuentas. Junta los flags que antes
+/// se pasaban sueltos en cada call-site (es `Copy`, se reusa en el loop de "chequear todos").
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckCtx {
+    /// Canal global: `true` = beta (pre-releases), `false` = estable (MAIN).
+    pub prefer_beta: bool,
+    /// Hay una API key de Nexus conectada (si no, los mods de Nexus no se pueden chequear).
+    pub nexus_connected: bool,
+    /// La cuenta de Nexus es Premium (habilita la descarga directa; si no, va por `nxm://`).
+    pub nexus_premium: bool,
+}
+
+/// Chequea si hay una version nueva de un mod segun su `ModSource`, despachando a `check_github` /
+/// `check_nexus`. Para Nexus, si NO hay API key conectada devuelve `Ok(None)` (no se puede chequear,
+/// pero NO es un error: el caller lo trata como "sin novedad"). `current` = version del `<id>.json`;
+/// `installed_tag` = el ultimo tag que instalamos. UNICO punto de dispatch (antes estaba duplicado en
+/// los dos workers del GUI, que ademas diferian en el guard de Nexus).
+pub fn check(
+    src: &ModSource,
+    mod_id: &str,
+    current: Option<&str>,
+    installed_tag: Option<&str>,
+    ctx: CheckCtx,
+) -> Result<Option<ModUpdate>> {
+    match src {
+        ModSource::GitHub { owner, repo } => {
+            check_github(owner, repo, mod_id, current, installed_tag, ctx.prefer_beta)
+        }
+        ModSource::Nexus {
+            game,
+            mod_id: nexus_mod_id,
+        } => {
+            if !ctx.nexus_connected {
+                return Ok(None); // sin API key no se puede chequear Nexus (no es un fallo)
+            }
+            check_nexus(
+                mod_id,
+                game,
+                *nexus_mod_id,
+                current,
+                installed_tag,
+                ctx.nexus_premium,
+            )
+        }
+    }
 }
 
 /// El origen efectivo de un mod: el override del usuario en `config.mod_sources` (prioridad) o el
@@ -390,6 +434,27 @@ mod tests {
         let beta = pick_release(&arr, "Mod", true).unwrap();
         assert_eq!(beta.tag, "v2.0.0-beta");
         assert!(beta.prerelease);
+    }
+
+    #[test]
+    fn check_nexus_desconectado_da_none_sin_red() {
+        // Sin API key de Nexus conectada, `check` devuelve Ok(None) sin tocar la red (no es un fallo).
+        let src = ModSource::Nexus {
+            game: "slaythespire2".into(),
+            mod_id: 42,
+        };
+        let r = check(
+            &src,
+            "Mod",
+            Some("1.0"),
+            None,
+            CheckCtx {
+                nexus_connected: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(r.is_none());
     }
 
     #[test]
