@@ -6,6 +6,20 @@ use crate::profile::{self, Profile};
 use eframe::egui;
 
 impl App {
+    /// Guarda el set actual como el perfil `name` (lo crea o lo sobrescribe). Centraliza el guardado
+    /// para reusarlo desde el camino directo y desde el de confirmar-sobrescritura.
+    fn save_profile(&mut self, name: &str) {
+        let prof = Profile::from_current(name, &self.mods);
+        match profile::save(&prof) {
+            Ok(()) => {
+                self.show_toast(format!("perfil guardado: {}", prof.name), false);
+                self.new_profile.clear();
+                self.profiles_loaded = false;
+            }
+            Err(e) => self.show_toast(format!("{e:#}"), true),
+        }
+    }
+
     pub(super) fn ui_profiles(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.install.is_none() {
             ui.label("Detecta el juego para usar perfiles.");
@@ -18,6 +32,7 @@ impl App {
         ui.label("Un perfil = un conjunto de mods habilitados. Aplicar uno deja exactamente esos.");
         ui.add_space(4.0);
 
+        let mut do_save = false;
         ui.horizontal(|ui| {
             ui.label("Guardar el set actual como:");
             ui.add(egui::TextEdit::singleline(&mut self.new_profile).desired_width(160.0));
@@ -26,17 +41,42 @@ impl App {
                 .add_enabled(can_save, egui::Button::new("Guardar"))
                 .clicked()
             {
-                let prof = Profile::from_current(self.new_profile.trim(), &self.mods);
-                match profile::save(&prof) {
-                    Ok(()) => {
-                        self.show_toast(format!("perfil guardado: {}", prof.name), false);
-                        self.new_profile.clear();
-                        self.profiles_loaded = false;
-                    }
-                    Err(e) => self.show_toast(format!("{e:#}"), true),
-                }
+                do_save = true;
             }
         });
+        if do_save {
+            let name = self.new_profile.trim().to_string();
+            // Si ya hay un perfil con ese nombre, sobrescribir REESCRIBE el archivo (irreversible, sin
+            // papelera): confirmar antes. Si no existe, guardar directo.
+            if self.profiles.iter().any(|p| p.name == name) {
+                self.confirm_save_profile = Some(name);
+            } else {
+                self.save_profile(&name);
+            }
+        }
+        // Confirmacion de sobrescritura de un perfil ya existente.
+        let mut confirm_overwrite = false;
+        let mut cancel_overwrite = false;
+        if let Some(name) = &self.confirm_save_profile {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    super::WARN,
+                    format!("Ya existe un perfil \"{name}\". ¿Sobrescribirlo con la lista actual?"),
+                );
+                if ui.button("Sobrescribir").clicked() {
+                    confirm_overwrite = true;
+                }
+                if ui.button("Cancelar").clicked() {
+                    cancel_overwrite = true;
+                }
+            });
+        }
+        if cancel_overwrite {
+            self.confirm_save_profile = None;
+        }
+        if confirm_overwrite && let Some(name) = self.confirm_save_profile.take() {
+            self.save_profile(&name);
+        }
         ui.separator();
 
         let can_act = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;

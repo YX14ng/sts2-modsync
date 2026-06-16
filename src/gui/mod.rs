@@ -207,6 +207,9 @@ struct App {
     // Preview de un codigo pegado ANTES de aplicarlo: (perfil a aplicar, impacto calculado). Se
     // muestra "activara N, desactivara M, faltan K" + Confirmar/Cancelar. None = no hay nada pendiente.
     pending_loadcode: Option<(Profile, crate::profile::ApplyReport)>,
+    // Nombre de un perfil pendiente de confirmar SOBRESCRITURA (guardar sobre uno que ya existe, que
+    // es irreversible: reescribe el archivo). None = no hay confirmacion pendiente.
+    confirm_save_profile: Option<String>,
 
     // Pestaña Publicar
     pub_name: String,
@@ -276,6 +279,7 @@ impl App {
             share_code: String::new(),
             import_code: String::new(),
             pending_loadcode: None,
+            confirm_save_profile: None,
             pub_name,
             pub_version: String::new(),
             pub_version_job: None,
@@ -599,6 +603,13 @@ impl App {
                     let r = self.install.as_ref().map(|i| launch::launch(i, via_steam));
                     if let Some(r) = r {
                         match r {
+                            // El launch por Steam solo "abre" el `steam://` — si Steam esta cerrado o
+                            // el appid quedo raro, el juego no aparece y antes no habia pista. Damos la
+                            // salida self-service (modo directo) en el mismo toast.
+                            Ok(()) if via_steam => self.show_toast(
+                                "lanzando por Steam... si no abre, destilda \"Jugar por Steam\" (barra lateral) y proba de nuevo (modo directo).",
+                                false,
+                            ),
                             Ok(()) => self.show_toast("lanzando el juego...", false),
                             Err(e) => self.show_toast(format!("{e:#}"), true),
                         }

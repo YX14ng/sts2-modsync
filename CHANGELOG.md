@@ -3,6 +3,22 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.23.0] - 2026-06-16 — pulido de UX (el amigo que recibe, el modder que publica)
+
+- **Pestaña Sync: UN solo campo que detecta solo.** Pegas un LINK (`https://...`) o un `usuario/repo`
+  y "Cargar" hace lo correcto (URL directa, o suscribirse al ultimo release del repo) — antes habia
+  que saber en cual de dos campos iba cada cosa. Ademas una linea que EXPLICA que pegar (el tab que
+  menos guiaba al amigo no-tecnico que recibe un set).
+- **Publicar: link directo para crear el token de GitHub** con el scope `public_repo` ya marcado
+  (crear un PAT a mano era la parte confusa).
+- **Pestaña Mods: botones "Abrir carpeta de mods" y "Abrir datos/log"** (antes los errores te pedian
+  navegar a `%APPDATA%` a mano), y **"Habilitar todos" / "Deshabilitar todos"** para cuando hay muchos
+  mods (reversible, tolera fallos por mod y reporta cuantos).
+- **Perfiles: guardar sobre un perfil que ya existe ahora PIDE confirmacion** (sobrescribir reescribe
+  el archivo, no va a la papelera).
+- **Jugar por Steam:** si tocas Jugar y no abre, el aviso te dice como pasar a modo directo (antes
+  quedaba un "lanzando..." y nada).
+
 ## [1.22.0] - 2026-06-16 — limpieza interna (sin cambios de comportamiento)
 
 Pasada de salud de codigo salida de la auditoria: consolida logica duplicada para que no diverja.

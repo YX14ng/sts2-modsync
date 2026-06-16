@@ -52,9 +52,8 @@ pub(super) struct ProgressState {
 #[derive(Default)]
 pub(super) struct SyncState {
     pub(super) screen: SyncScreen,
-    pub(super) url: String,                // input de URL del set
-    pub(super) repo_input: String, // input "usuario/repo" para suscribirse por repo (sigue el ultimo release)
-    pub(super) source: String,     // etiqueta del set cargado (archivo o URL), vacia = nada cargado
+    pub(super) url: String, // input UNICO: URL del set-manifest, o `usuario/repo` (sigue el ultimo release)
+    pub(super) source: String, // etiqueta del set cargado (archivo o URL), vacia = nada cargado
     pub(super) loaded_url: Option<String>, // URL DE ORIGEN del set cargado (None si vino de archivo)
     /// Clave estable de la suscripcion del set cargado (entrada de `subscribed_sets`): una URL fija
     /// o `repo:owner/repo`. Bajo ella se registra la version sincronizada. None si vino de archivo.
@@ -169,53 +168,40 @@ impl App {
     }
 
     fn ui_sync_review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let mut do_load_url = false;
+        let mut do_load = false;
         let mut do_open_file = false;
-        let mut do_subscribe_repo = false;
         let mut load_saved: Option<String> = None;
         let mut del_saved: Option<String> = None;
         let mut check_updates = false;
         let busy_any = self.any_job();
 
         card(ui, "Cargar un set", |ui| {
+            // On-ramp para el amigo que recibe un set: que pegar y donde (el unico tab que antes no
+            // lo explicaba). Un solo campo: detecta solo si es un LINK o un `usuario/repo`.
+            ui.label(
+                egui::RichText::new(
+                    "Tu amigo te paso un LINK (https://...) o un usuario/repo de GitHub: pegalo aca y \
+                     dale Cargar. Si te paso un archivo set-manifest.json suelto, usa \"Abrir archivo...\".",
+                )
+                .weak(),
+            );
             // `horizontal_wrapped` + anchos moderados: en la ventana minima (700px) la fila no se
             // sale; si no entra, los botones bajan a la linea siguiente en vez de cortarse.
             ui.horizontal_wrapped(|ui| {
-                ui.label("URL:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.sync.url)
-                        .hint_text("https://.../set-manifest.json")
-                        .desired_width(240.0),
+                        .hint_text("https://.../set-manifest.json   o   usuario/repo")
+                        .desired_width(300.0),
                 );
                 let can = !busy_any && !self.sync.url.trim().is_empty();
-                if ui
-                    .add_enabled(can, egui::Button::new("Cargar URL"))
-                    .clicked()
-                {
-                    do_load_url = true;
+                if ui.add_enabled(can, egui::Button::new("Cargar")).clicked() {
+                    do_load = true;
                 }
                 if ui
                     .add_enabled(!busy_any, egui::Button::new("Abrir archivo..."))
                     .clicked()
                 {
                     do_open_file = true;
-                }
-            });
-            // Suscribirse por REPO: sigue el ULTIMO release (no hay que re-pegar la URL al actualizar).
-            ui.horizontal_wrapped(|ui| {
-                ui.label("o Repositorio:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.sync.repo_input)
-                        .hint_text("usuario/repo (sigue el ultimo release)")
-                        .desired_width(220.0),
-                );
-                let can =
-                    !busy_any && crate::github::normalize_repo(&self.sync.repo_input).is_some();
-                if ui
-                    .add_enabled(can, egui::Button::new("Suscribirse"))
-                    .clicked()
-                {
-                    do_subscribe_repo = true;
                 }
             });
             if self.sync.fetch_job.is_some() {
@@ -269,14 +255,22 @@ impl App {
             }
         });
 
-        if do_load_url {
-            self.load_url(ctx);
+        if do_load {
+            // Deteccion (igual criterio que la CLI `cmd_sync`): un `usuario/repo` (NO-http que
+            // `normalize_repo` acepta) => suscribirse y seguir el ultimo release; cualquier otra cosa
+            // (una URL https) => cargar directo. Un link de github.com/<repo> "pagina" no se baja como
+            // manifest, pero el hint pide el `usuario/repo` o el link al `set-manifest.json`.
+            let input = self.sync.url.trim().to_string();
+            match (!input.starts_with("http"))
+                .then(|| crate::github::normalize_repo(&input))
+                .flatten()
+            {
+                Some(repo) => self.subscribe_repo(ctx, &repo),
+                None => self.load_url(ctx),
+            }
         }
         if do_open_file {
             self.open_manifest(ctx);
-        }
-        if do_subscribe_repo {
-            self.subscribe_repo(ctx);
         }
         if check_updates {
             self.check_set_updates(ctx);
@@ -473,19 +467,15 @@ impl App {
         self.load_source(url, ctx);
     }
 
-    /// Suscribirse a un REPO (`usuario/repo`): sigue el ULTIMO release. Guarda la suscripcion como
-    /// `repo:owner/repo` y la carga (resolviendo el ultimo release en el worker).
-    fn subscribe_repo(&mut self, ctx: &egui::Context) {
-        let Some(repo) = crate::github::normalize_repo(&self.sync.repo_input) else {
-            self.sync.load_err = Some("repositorio invalido (usa usuario/repo)".into());
-            return;
-        };
-        let key = config::repo_sub(&repo);
+    /// Suscribirse a un REPO (`usuario/repo` ya normalizado): sigue el ULTIMO release. Guarda la
+    /// suscripcion como `repo:owner/repo` y la carga (resolviendo el ultimo release en el worker).
+    fn subscribe_repo(&mut self, ctx: &egui::Context, repo: &str) {
+        let key = config::repo_sub(repo);
         if !self.cfg.subscribed_sets.contains(&key) {
             self.cfg.subscribed_sets.push(key.clone());
             let _ = config::save(&self.cfg);
         }
-        self.sync.repo_input.clear();
+        self.sync.url.clear();
         self.load_source(key, ctx);
     }
 

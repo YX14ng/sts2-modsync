@@ -34,6 +34,8 @@ impl App {
 
         let mut pick_dir = false;
         let mut pick_zip = false;
+        let mut open_mods_folder = false;
+        let mut open_data_folder = false;
         ui.horizontal(|ui| {
             ui.label("Buscar:");
             ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(180.0));
@@ -46,6 +48,23 @@ impl App {
             }
             if ui.button("Re-escanear").clicked() {
                 self.mods_loaded = false;
+            }
+            if ui
+                .button("Abrir carpeta de mods")
+                .on_hover_text("Abre mods/ en el explorador (para instalar/revisar a mano).")
+                .clicked()
+            {
+                open_mods_folder = true;
+            }
+            if ui
+                .button("Abrir datos/log")
+                .on_hover_text(
+                    "Abre la carpeta de config y log (%APPDATA%/sts2-modsync) — util si un error \
+                     te pide revisar el log.",
+                )
+                .clicked()
+            {
+                open_data_folder = true;
             }
             // Canal GLOBAL de actualizacion de mods (estable vs beta/pre-releases).
             ui.separator();
@@ -63,6 +82,22 @@ impl App {
         }
         if pick_zip {
             self.install_picked(ctx, true);
+        }
+        if open_mods_folder
+            && let Some(install) = &self.install
+            && let Err(e) = manager::open_folder(&install.mods_dir)
+        {
+            self.show_toast(format!("no se pudo abrir la carpeta: {e:#}"), true);
+        }
+        if open_data_folder {
+            match crate::config::data_dir() {
+                Some(dir) => {
+                    if let Err(e) = manager::open_folder(&dir) {
+                        self.show_toast(format!("no se pudo abrir la carpeta: {e:#}"), true);
+                    }
+                }
+                None => self.show_toast("no se pudo resolver la carpeta de datos", true),
+            }
         }
 
         // Chequear updates de TODOS los mods de una (varias llamadas a la red en un worker).
@@ -189,6 +224,35 @@ impl App {
         });
         let can_act = self.busy.is_empty() && self.action_job.is_none() && !self.game_running;
         let filter = self.filter.to_ascii_lowercase();
+
+        // Acciones masivas (util cuando hay muchos mods: troubleshooting, cambiar de contexto). Operan
+        // sobre TODOS los mods (no el filtro), son reversibles (mover carpetas) y toleran fallos por
+        // mod (reportan cuantos no se pudieron). Para "dejar exactamente este set" estan los Perfiles.
+        let mut enable_all = false;
+        let mut disable_all = false;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(can_act && n_off > 0, egui::Button::new("Habilitar todos"))
+                .clicked()
+            {
+                enable_all = true;
+            }
+            if ui
+                .add_enabled(can_act && n_on > 0, egui::Button::new("Deshabilitar todos"))
+                .clicked()
+            {
+                disable_all = true;
+            }
+            if self.game_running {
+                ui.colored_label(WARN, "Cerra el juego para habilitar/deshabilitar.");
+            }
+        });
+        if enable_all {
+            self.bulk_toggle(ctx, true);
+        }
+        if disable_all {
+            self.bulk_toggle(ctx, false);
+        }
 
         // Orden de display: alfabetico (de `scan`) y, si se pidio, habilitados primero (estable).
         let order: Vec<usize> = {
@@ -654,6 +718,48 @@ impl App {
     // --- auto-update de mods (upstream GitHub) ------------------------------
 
     /// Chequea en un hilo si hay version nueva de `id` en su origen (GitHub por canal, o Nexus via API).
+    /// Habilita (`enable=true`) o deshabilita TODOS los mods en una sola accion. Solo toca los que
+    /// hay que cambiar (ids DISTINTOS) y TOLERA fallos por mod (una carpeta con nombre != id, o un
+    /// duplicado, puede fallar el move por id): los reporta, no aborta el resto. Reversible.
+    fn bulk_toggle(&mut self, ctx: &egui::Context, enable: bool) {
+        let Some(install) = self.install.clone() else {
+            return;
+        };
+        let ids: std::collections::BTreeSet<String> = self
+            .mods
+            .iter()
+            .filter(|m| m.enabled != enable)
+            .map(|m| m.id().to_string())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let verb = if enable {
+            "habilitando"
+        } else {
+            "deshabilitando"
+        };
+        self.run_action(ctx, format!("{verb} todos..."), move || {
+            let (mut n, mut failed) = (0usize, 0usize);
+            for id in &ids {
+                let r = if enable {
+                    manager::enable(&install, id)
+                } else {
+                    manager::disable(&install, id)
+                };
+                if r.is_ok() { n += 1 } else { failed += 1 }
+            }
+            let done = if enable { "habilitados" } else { "deshabilitados" };
+            Ok(if failed == 0 {
+                format!("{done} {n} mod(s)")
+            } else {
+                format!(
+                    "{done} {n} mod(s) · {failed} no se pudieron (carpeta con nombre != id o duplicado)"
+                )
+            })
+        });
+    }
+
     /// Contexto del chequeo de updates a partir del estado actual (canal global + cuentas de Nexus).
     fn check_ctx(&self) -> crate::modupdate::CheckCtx {
         crate::modupdate::CheckCtx {

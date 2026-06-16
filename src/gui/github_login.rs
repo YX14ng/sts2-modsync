@@ -367,12 +367,21 @@ impl App {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.gh_pat)
                         .password(true)
-                        .hint_text("PAT classic con scope public_repo (o crea el repo a mano)")
+                        .hint_text("PAT classic con scope public_repo")
                         .desired_width(320.0),
                 );
                 if ui.button("Guardar token").clicked() {
                     self.gh_connect_pat(ctx);
                 }
+            });
+            // Link DIRECTO a crear el token ya con el scope correcto preseleccionado: crear un PAT a
+            // mano (elegir scopes) es la parte confusa para no-expertos.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("¿No tenes uno?").weak());
+                ui.hyperlink_to(
+                    "Crear el token (scope public_repo ya marcado)",
+                    "https://github.com/settings/tokens/new?scopes=public_repo&description=sts2-modsync",
+                );
             });
             if crate::github::device_flow_enabled()
                 && ui.button("Conectar con GitHub (device-flow)").clicked()
