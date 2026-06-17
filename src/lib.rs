@@ -11,6 +11,9 @@ pub mod detect;
 pub mod doctor;
 pub mod github;
 pub mod hashing;
+/// Icono de la app generado por codigo (RGBA), compartido por la ventana del GUI y `build.rs` (que lo
+/// embebe como icono del `.exe`). Ver `icon.rs`.
+pub mod icon;
 pub mod launch;
 pub mod loadcode;
 pub mod logging;

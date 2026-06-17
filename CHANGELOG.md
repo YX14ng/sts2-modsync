@@ -3,6 +3,17 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.30.0] - 2026-06-16 — icono de la app + limpieza de archivos viejos al actualizar
+
+- **La app ahora tiene icono** (cuadrado redondeado azul con una pila de cartas blanca): se ve en la
+  barra de tareas / barra de titulo / alt-tab (ventana) Y en el Explorador / accesos directos (el
+  `.exe`). Generado por codigo (`src/icon.rs`), sin binarios en el repo; el `.exe` lo embebe `build.rs`
+  con la MISMA imagen (best-effort: si faltara el compilador de recursos, el build no se rompe).
+- **Al actualizar (y al arrancar) se borran archivos VIEJOS del programa**: el `.new` (temp de una
+  actualizacion cortada a mitad) y binarios OBSOLETOS de antes del single-exe (`sts2-modsync-gui.exe`),
+  asi la carpeta queda limpia. NO toca el `.bak` (si quedo uno es porque un update fallo y es la unica
+  copia para recuperar). El `.bak`/`.new` de un update EXITOSO ya se limpiaban antes.
+
 ## [1.29.0] - 2026-06-16 — los mods instalados desde Nexus quedan auto-actualizables
 
 - **Al instalar un mod de Nexus por la app (boton "Mod Manager Download" -> handler `nxm://`), ahora se

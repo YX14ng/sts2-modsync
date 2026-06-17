@@ -1,6 +1,6 @@
 [package]
 name = "sts2-modsync"
-version = "1.29.0"
+version = "1.30.0"
 edition = "2024"
 license = "MIT"
 description = "Mod manager de Slay the Spire 2 (Steam o pirata) con sincronizacion de sets de mods barata y rapida"
@@ -58,6 +58,10 @@ gui = ["dep:eframe", "p2p"]
 # P2P estilo torrent (librqbit + tokio). GATEADO: el core/CLI por default queda liviano y
 # `cargo test` no arrastra tokio/red. Sin esta feature la sync usa solo HTTP (GitHubReleases).
 p2p = ["dep:librqbit", "dep:tokio"]
+
+[build-dependencies]
+ico = "0.5.0"
+winresource = "0.1.31"
 
 # SINGLE-EXE: hay UN solo binario, `sts2-modsync` (src/main.rs, auto-descubierto). Con
 # `--features gui` ese binario incluye la GUI y la abre sin argumentos; sin la feature es

@@ -234,12 +234,38 @@ pub fn apply(rel: &Release) -> Result<()> {
         }
     }
     let _ = std::fs::remove_file(&bak); // exito: descartar el respaldo
+    cleanup_stale(); // y limpiar archivos viejos/obsoletos del programa al actualizar
     crate::logging::log_line(&format!("auto-update: actualizado a {}", rel.tag));
 
     std::process::Command::new(&cur)
         .spawn()
         .context("relanzando la app actualizada")?;
     std::process::exit(0);
+}
+
+/// Borra archivos VIEJOS del programa que pudieron quedar de una version anterior o de una
+/// actualizacion interrumpida, dejando la carpeta del exe limpia tras actualizar. Best-effort (se
+/// llama al arrancar y al final de `apply`; si un archivo esta lockeado, se ignora). Borra:
+///  - el `.new` (temp de extraccion) si quedo colgado de un update que se corto a mitad;
+///  - binarios OBSOLETOS de antes del single-exe (`sts2-modsync-gui.exe`/`.pdb`, 1.1.0): ya no se usan.
+///
+/// NO toca el `.bak`: `apply` ya lo borra al actualizar OK; si quedo uno es porque el update FALLO, y
+/// ahi es la unica copia del exe viejo para recuperar a mano (no hay que borrarlo).
+pub fn cleanup_stale() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut targets = vec![exe.with_extension("new")];
+    if let Some(dir) = exe.parent() {
+        for name in ["sts2-modsync-gui.exe", "sts2-modsync-gui.pdb"] {
+            targets.push(dir.join(name));
+        }
+    }
+    for t in targets {
+        if t.is_file() {
+            let _ = std::fs::remove_file(&t);
+        }
+    }
 }
 
 /// Extrae del zip (en `bytes`) la entrada cuyo basename == `wanted` hacia `dest`.

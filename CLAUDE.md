@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.29.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.30.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -103,7 +103,10 @@ relanzar. **Nadie necesita una clave minisign** ni para publicar ni para actuali
 - **Core:** `detect` (Steam/pirata + juego-abierto) · `config` (%APPDATA%) · `util` (helpers chicos
   compartidos: `human_size` formato de tamaños, `unique_nanos` para nombres temp) · `doctor` (reporte
   de diagnostico read-only para soporte: version/install/ModListSorter/huella/mods+versiones/sets;
-  CLI `doctor`, GUI "Copiar diagnostico"; sin secretos).
+  CLI `doctor`, GUI "Copiar diagnostico"; sin secretos) · `icon` (icono de la app generado por codigo —
+  RGBA, solo `std`— que comparten la ventana del GUI [`with_icon`] y `build.rs` [lo encodea a `.ico` y
+  lo embebe en el `.exe` con `winresource`, best-effort]). `update::cleanup_stale()` borra archivos
+  viejos del programa (`.new`, binarios obsoletos pre-single-exe) al actualizar/arrancar; NO toca el `.bak`.
 - **Mod manager:** `modlist` (escanea `mods/`+`mods_disabled/`, parsea `<id>.json`, deps/conflictos,
   orden de carga; `ModManifest.source_hint()` lee el upstream del mod; `duplicates()` = grupos de
   mismo id en >1 carpeta, eligiendo conservar la version mas nueva) · `manager` (enable/disable/

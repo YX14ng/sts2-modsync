@@ -53,6 +53,7 @@ fn main() -> Result<()> {
     // sobre todo para `nxm <link>`, que Windows lanza SIN consola desde el navegador: sin esto, un
     // fallo de descarga/extraccion no dejaba ningun rastro y el panic-hook no estaba instalado.
     sts2_modsync::logging::init("cli");
+    sts2_modsync::update::cleanup_stale(); // borrar archivos viejos/obsoletos del programa
     if cmd == "update" {
         return cmd_update();
     }

@@ -100,12 +100,20 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 pub fn run() -> eframe::Result {
     // Log + panic-hook a %APPDATA% (el GUI puede no tener consola; un crash debe dejar rastro).
     crate::logging::init("gui");
+    crate::update::cleanup_stale(); // borrar archivos viejos/obsoletos (tras un auto-update o upgrade)
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([920.0, 660.0])
             .with_min_inner_size([700.0, 480.0])
-            .with_title("sts2-modsync — mod manager"),
+            .with_title("sts2-modsync — mod manager")
+            // Icono de la ventana (barra de tareas / title bar / alt-tab). El icono del .exe en el
+            // Explorador lo embebe `build.rs` con la MISMA generacion (`crate::icon`).
+            .with_icon(egui::IconData {
+                rgba: crate::icon::rgba(256),
+                width: 256,
+                height: 256,
+            }),
         ..Default::default()
     };
     eframe::run_native(
