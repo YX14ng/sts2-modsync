@@ -14,7 +14,7 @@ modulo mas** (pestaña Sync). GUI-first (eframe) + CLI.
 
 ## Estado
 
-**v1.28.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
+**v1.29.0 (estable).** Las fases 0.4-0.7 del [ROADMAP.md](ROADMAP.md) (integridad transaccional,
 seguridad de la cadena, distribuible/diagnosticable, pulido UX) estan hechas y revisadas; el DoD
 esta completo. Los tres features post-1.0 tambien estan hechos: single `.exe` (1.1.0), login de
 GitHub + publish por API REST sin `gh` (1.2.0), firma `.minisig` opcional para sets (1.3.0). Mas:
@@ -182,7 +182,9 @@ Dos artefactos JSON distintos, **NO confundir**: el **`<id>.json`** que cada mod
   · `nexus-login` / `nexus-status` / `nexus-logout` (API Key de Nexus guardada en el llavero; lee de
     `NEXUS_APIKEY` o stdin; habilita el chequeo de version de mods de Nexus — `mod-check`/GUI)
   · `nxm-register` / `nxm-unregister` (alta/baja del handler `nxm://` en HKCU) · `nxm <link>` (lo
-    INVOCA Windows al tocar "Mod Manager Download" en Nexus: baja+instala; resultado en un dialogo)
+    INVOCA Windows al tocar "Mod Manager Download" en Nexus: baja+instala; resultado en un dialogo. Al
+    instalar RECUERDA el origen Nexus del mod —`remember_nexus_source`: game+mod_id salen del link— en
+    `config.mod_sources`, asi queda auto-actualizable sin pegar la URL a mano [1.29.0])
   · `seed <out_dir>` (P2P: seedea un set publicado por torrent; bloquea hasta Ctrl-C; necesita
     `--features p2p`. En el GUI: boton "Seedear este set (P2P)" en la pestaña Publicar).
 - `cargo test` · `cargo clippy --all-targets --features gui` · `cargo fmt` · `cargo build --release`.

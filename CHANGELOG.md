@@ -3,6 +3,20 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/). Mientras estemos en 0.x, los
 cambios incompatibles pueden ocurrir en cualquier release.
 
+## [1.29.0] - 2026-06-16 — los mods instalados desde Nexus quedan auto-actualizables
+
+- **Al instalar un mod de Nexus por la app (boton "Mod Manager Download" -> handler `nxm://`), ahora se
+  RECUERDA solo su origen de Nexus** (game + mod id, que vienen en el link), guardado en
+  `config.mod_sources`. Asi el mod queda AUTO-actualizable: "Buscar actualizaciones de todos los mods"
+  (y el detalle del mod) lo chequea sin que pegues la URL de Nexus a mano. El dialogo de instalacion lo
+  confirma ("origen recordado: se va a auto-actualizar").
+  - Es el camino CONFIABLE: el id de Nexus sale del propio link, no de adivinar/buscar. (Nexus no tiene
+    una forma 100% confiable de identificar un mod YA instalado/extraido: su busqueda por hash matchea el
+    ARCHIVO subido, no los archivos extraidos, y la busqueda por nombre es un endpoint no oficial — por
+    eso el auto-registro se hace en el momento de instalar, cuando el id esta a mano.)
+  - Para mods que instalaste de otra forma, segui pegando la URL de Nexus en el detalle (como antes); de
+    ahi en mas se auto-chequean.
+
 ## [1.28.0] - 2026-06-16 — refactor interno: abstraccion `Job<T>` para los workers (sin cambios visibles)
 
 Item estructural del analisis. Sin cambios de comportamiento para el usuario; gateado + review de 3

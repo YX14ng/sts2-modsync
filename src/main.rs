@@ -968,7 +968,14 @@ fn run_nxm(link: &str) -> Result<String> {
             let r = manager::install_from_zip_confirmed(&install, &tmp, confirm_replace_dialog);
             let _ = std::fs::remove_file(&tmp);
             match r.context("instalando el archivo de Nexus")? {
-                Some(id) => Ok(format!("instalado desde Nexus: {id}")),
+                Some(id) => {
+                    // AUTO-recordar el origen Nexus de este mod (el id de Nexus viene en el link):
+                    // queda auto-actualizable, "Buscar actualizaciones" lo chequea sin pegar la URL.
+                    remember_nexus_source(&id, &l.game, l.mod_id);
+                    Ok(format!(
+                        "instalado desde Nexus: {id} (origen recordado: se va a auto-actualizar)"
+                    ))
+                }
                 None => {
                     Ok("cancelado: el mod ya estaba instalado y elegiste no reemplazarlo.".into())
                 }
@@ -986,6 +993,27 @@ fn run_nxm(link: &str) -> Result<String> {
                 tmp.display()
             )),
         },
+    }
+}
+
+/// Recuerda el origen NEXUS de un mod recien instalado por `nxm://` (game + mod_id, que vienen en el
+/// link). Lo guarda en `config.mod_sources[mod_id]` para que el chequeo de updates lo trate como un mod
+/// de Nexus SIN que el usuario pegue la URL. Best-effort (si no se puede guardar, no rompe la instalacion).
+/// Solo escribe si cambia (no re-guarda config al pedo). Pisa un origen previo: instalar desde Nexus es la
+/// señal explicita mas reciente de cual es el upstream.
+fn remember_nexus_source(mod_id: &str, game: &str, nexus_mod_id: u64) {
+    let src = ModSource::Nexus {
+        game: game.to_string(),
+        mod_id: nexus_mod_id,
+    }
+    .to_storage();
+    let mut cfg = config::load();
+    if cfg.mod_sources.get(mod_id) == Some(&src) {
+        return; // ya estaba; nada que guardar
+    }
+    cfg.mod_sources.insert(mod_id.to_string(), src);
+    if let Err(e) = config::save(&cfg) {
+        eprintln!("(aviso: no se pudo recordar el origen Nexus de {mod_id}: {e:#})");
     }
 }
 
